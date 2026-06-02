@@ -111,7 +111,7 @@ use_examples = st.checkbox("Use built-in example sequences", value=True)
 # ── Generate library ──────────────────────────────────────────────────────────
 st.header("2. Generate library")
 
-if st.button("🧪 Generate mRNA Library", type="primary", use_container_width=True):
+if st.button("🧬 Generate mRNA Library", type="primary", use_container_width=True):
     with st.spinner("Generating mRNA library..."):
         # Determine data directories
         if use_examples and not (utr5_files and orf_files and utr3_files):
