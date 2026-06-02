@@ -30,13 +30,16 @@ max_combinations: 1000
 # ── Scoring ──────────────────────────────────────────────────────────────────
 # Weights must sum to 1.0 (they are normalised automatically if not).
 scoring_weights:
-  cai:            0.25   # Codon Adaptation Index (geometric mean)
-  mfe_stability:  0.20   # Minimum Free Energy structural stability
-  gc_content:     0.15   # GC content optimality (target ~50–55%)
-  utr_access:     0.15   # UTR ribosome / factor accessibility
-  codon_pair:     0.10   # Codon pair bias (avoid under-represented pairs)
-  u_depletion:    0.10   # Uridine depletion (innate immune evasion)
-  cpg_depletion:  0.05   # CpG depletion (TLR9 avoidance)
+  cai:              0.20   # Codon Adaptation Index (geometric mean)
+  mfe_stability:    0.15   # Minimum Free Energy structural stability
+  gc_content:       0.10   # GC content optimality (target ~50–55%)
+  utr_access:       0.12   # UTR ribosome / factor accessibility (motif-aware)
+  codon_pair:       0.10   # Codon pair bias (comprehensive CPB table)
+  u_depletion:      0.08   # Uridine depletion (innate immune evasion)
+  cpg_depletion:    0.05   # CpG depletion (TLR9 avoidance)
+  translation_eff:  0.10   # Translation efficiency (5'UTR k-mer model)
+  codon_ramp:       0.05   # 5' ORF codon ramp (co-translational folding)
+  codon_diversity:  0.05   # Codon diversity (autocorrelation avoidance)
 
 # ── Barcoding ─────────────────────────────────────────────────────────────────
 barcoding:
