@@ -12,7 +12,8 @@ from mrna_design.assembler import (
 from mrna_design.scorer import (
     calc_gc_content, gc_score, cai_score, mfe_stability_score,
     utr_accessibility_score, codon_pair_bias_score, uridine_depletion_score,
-    cpg_depletion_score, score_library
+    cpg_depletion_score, score_library,
+    translation_efficiency_score, codon_ramp_score, codon_diversity_score,
 )
 from mrna_design.barcode import (
     hamming_distance, gc_fraction, has_homopolymer,
@@ -312,3 +313,75 @@ def test_qc_library_integration(tmp_fasta_dirs):
         assert "qc_passed" in c
         assert "qc_warnings" in c
         assert "qc_penalty" in c
+
+
+# ── New scoring models (translation efficiency, codon ramp, diversity) ────────
+
+def test_translation_efficiency_range():
+    """Translation efficiency score should be in [0, 1]."""
+    utr5 = "GCCACCAUGGCUGCCGAGCUGAAGCCCGAG"
+    score = translation_efficiency_score(utr5)
+    assert 0.0 <= score <= 1.0
+
+def test_translation_efficiency_kozak_bonus():
+    """UTR with strong Kozak should score higher than one without."""
+    good_utr = "AAAAAGCCACCAUGG" * 3 + "GCCACC"
+    bad_utr = "UUUUUUUUUUUUUUUUUUUUU"
+    assert translation_efficiency_score(good_utr) > translation_efficiency_score(bad_utr)
+
+def test_translation_efficiency_uorf_penalty():
+    """UTR with upstream AUG should score lower."""
+    no_aug = "GCCGCCGCCGCCGCCACC"
+    has_aug = "GCCAUGCCCAUGCCCACC"
+    assert translation_efficiency_score(no_aug) > translation_efficiency_score(has_aug)
+
+def test_codon_ramp_range():
+    """Codon ramp score should be in [0, 1]."""
+    orf = "AUGCUGAAGCCCGAGAACGCC" * 10
+    score = codon_ramp_score(orf)
+    assert 0.0 <= score <= 1.0
+
+def test_codon_ramp_short_seq():
+    """Short ORF should return default 0.5."""
+    assert codon_ramp_score("AUGCUG") == 0.5
+
+def test_codon_diversity_range():
+    """Codon diversity score should be in [0, 1]."""
+    orf = "AUGCUGAAGCCCGAGAACGCC" * 10
+    score = codon_diversity_score(orf)
+    assert 0.0 <= score <= 1.0
+
+def test_codon_diversity_repetitive():
+    """Highly repetitive codons should score lower than diverse ones."""
+    # Same codon repeated (CUG CUG CUG...)
+    repetitive = "CUG" * 30
+    # Diverse leucine codons
+    diverse = ("CUG" + "CUC" + "UUG" + "CUA" + "CUU" + "UUA") * 5
+    assert codon_diversity_score(diverse) > codon_diversity_score(repetitive)
+
+def test_score_library_has_new_metrics(tmp_fasta_dirs):
+    """Scored library should include all new metric fields."""
+    from mrna_design.assembler import assemble_library
+    lib = assemble_library(
+        utr5_dir=tmp_fasta_dirs / "utr5",
+        orf_dir=tmp_fasta_dirs / "orf",
+        utr3_dir=tmp_fasta_dirs / "utr3",
+    )
+    scored = score_library(lib)
+    for c in scored:
+        assert "translation_eff" in c
+        assert "codon_ramp" in c
+        assert "codon_diversity" in c
+        assert 0.0 <= c["translation_eff"] <= 1.0
+        assert 0.0 <= c["codon_ramp"] <= 1.0
+        assert 0.0 <= c["codon_diversity"] <= 1.0
+
+def test_codon_pair_bias_comprehensive():
+    """CPB score should differentiate optimized vs. deoptimized sequences."""
+    # Sequence rich in over-represented pairs (GAG-AAG, AAG-CUG)
+    good_pairs = "GAGAAGGAGCUGAAGCUGGAGAAGGAG" * 3
+    # Sequence rich in under-represented pairs (CUA-CGA, UUA-UUA)
+    bad_pairs = "CUACGAUUAUUAGUAGUACUACGA" * 3
+    good_score = codon_pair_bias_score(good_pairs)
+    bad_score = codon_pair_bias_score(bad_pairs)
+    assert good_score > bad_score

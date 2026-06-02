@@ -142,13 +142,16 @@ def _select_balanced_codon(
 ) -> str:
     """
     Multi-objective codon selection balancing:
-      - CAI (codon frequency) — weight 0.5
-      - Uridine depletion     — weight 0.3
-      - CpG avoidance         — weight 0.2
+      - CAI (codon frequency)         — weight 0.40
+      - Uridine depletion             — weight 0.25
+      - CpG avoidance                 — weight 0.15
+      - Codon autocorrelation penalty — weight 0.10
+      - Codon pair bias avoidance     — weight 0.10
 
     Scores each synonym and picks the best composite.
     """
     next_codon = all_codons[idx + 1] if idx + 1 < len(all_codons) else None
+    prev_codon = all_codons[idx - 1] if idx > 0 else None
     best_codon = synonyms[0][0]
     best_score = -1.0
 
@@ -164,14 +167,50 @@ def _select_balanced_codon(
         cpg_count = _codon_cpg_penalty(codon, next_codon)
         cpg_component = 1.0 - cpg_count * 0.5  # 0 CpG → 1.0, 2 CpG → 0.0
 
+        # Codon autocorrelation: penalize using same codon as previous
+        autocorr_component = 0.0 if (prev_codon and codon == prev_codon) else 1.0
+
+        # Codon pair bias: avoid under-represented pairs with neighbors
+        cpb_component = 1.0
+        if prev_codon:
+            pair_score = _CODON_PAIR_SCORES.get((prev_codon, codon), 0.0)
+            if pair_score < 0:
+                cpb_component = max(0.0, 1.0 + pair_score * 2)  # Scale penalty
+        if next_codon:
+            pair_score = _CODON_PAIR_SCORES.get((codon, next_codon), 0.0)
+            if pair_score < 0:
+                cpb_component = min(cpb_component, max(0.0, 1.0 + pair_score * 2))
+
         # Weighted sum
-        score = 0.5 * cai_component + 0.3 * u_component + 0.2 * cpg_component
+        score = (
+            0.40 * cai_component
+            + 0.25 * u_component
+            + 0.15 * cpg_component
+            + 0.10 * autocorr_component
+            + 0.10 * cpb_component
+        )
 
         if score > best_score:
             best_score = score
             best_codon = codon
 
     return best_codon
+
+
+# Import CPB scores for optimizer use
+_CODON_PAIR_SCORES: dict[tuple[str, str], float] = {}
+
+def _load_cpb_scores():
+    """Lazy-load CPB scores from scorer module."""
+    global _CODON_PAIR_SCORES
+    if not _CODON_PAIR_SCORES:
+        try:
+            from mrna_design.scorer import UNDERREPRESENTED_CODON_PAIRS
+            _CODON_PAIR_SCORES = UNDERREPRESENTED_CODON_PAIRS
+        except ImportError:
+            pass
+
+_load_cpb_scores()
 
 
 def optimize_sequences(orf_dir: Path, cfg: dict) -> None:

@@ -13,14 +13,17 @@ barcodes, and outputs ranked FASTA + CSV.
 ## Features
 
 - Combinatorial assembly: 5'UTR × ORF × 3'UTR with configurable cap, Kozak, and poly-A
-- **Multi-objective scoring** with 7 biophysical metrics:
+- **Multi-objective scoring** with 10 biophysical metrics:
   - CAI (geometric mean of relative adaptiveness — Sharp & Li method)
   - MFE stability (ViennaRNA if installed, else nearest-neighbour dinucleotide model)
   - GC content optimality (Gaussian penalty model)
-  - UTR accessibility (structure-aware with ViennaRNA fallback)
-  - Codon pair bias (penalizes translationally attenuating pairs)
+  - UTR accessibility (structure + motif-aware: TOP, ARE, CPE detection)
+  - Codon pair bias (comprehensive CPB table — Coleman et al. 2008)
   - Uridine depletion (innate immune evasion for modified mRNA)
   - CpG depletion (TLR9 avoidance)
+  - Translation efficiency (5'UTR k-mer model inspired by Optimus 5-Prime)
+  - Codon ramp (5' ORF slow ramp for co-translational folding — Tuller et al.)
+  - Codon diversity (autocorrelation avoidance — tRNA pool depletion)
 - **Sequence QC module** with 9 automated checks:
   - CpG dinucleotide density (immunogenicity)
   - Uridine content (immune activation)
@@ -31,7 +34,7 @@ barcodes, and outputs ranked FASTA + CSV.
   - Upstream AUG in 5'UTR (leaky scanning risk)
   - Inverted repeats / dsRNA potential (innate immune sensors)
   - miRNA seed matches in 3'UTR (stability risk)
-- **Multi-objective codon optimizer** (balanced CAI + low-U + low-CpG)
+- **Multi-objective codon optimizer** (balanced CAI + low-U + low-CpG + pair bias + autocorrelation)
 - Error-correcting barcodes: DNA, peptide-encoding (LC-MS/MS), or QuART retron style
 - Built-in codon optimizer with hooks for VaxPress / LinearDesign
 - Ranked CSV + FASTA + JSON outputs
@@ -140,20 +143,27 @@ pytest tests/ -v
 
 ---
 
-## Upgrading scoring to real models
+## Scoring models
 
-The scoring functions in `mrna_design/scorer.py` automatically use ViennaRNA when
-installed. Without it, a physics-based nearest-neighbour dinucleotide energy model
-provides realistic MFE estimates. For further accuracy:
+The scoring pipeline in `mrna_design/scorer.py` uses 10 biophysical metrics.
+Below is what each implements and what optional deep-learning upgrades exist:
 
 | Metric | Current Implementation | Optional Upgrade |
 |---|---|---|
 | CAI | Geometric mean of relative adaptiveness (Sharp & Li) | — (already production-grade) |
-| MFE | ViennaRNA `RNA.fold()` or dinucleotide NN model | — (already realistic) |
-| UTR accessibility | GC-based + ViennaRNA structure (if available) | mRNABERT / UTR-LM embeddings |
-| Codon pair bias | Log-ratio observed/expected pairs | Full CPB table from Coleman et al. |
-| Translation efficiency | Not directly modeled | Optimus 5-Prime, Saluki, or iCodon |
-| Full joint optimization | Multi-objective balanced optimizer | VaxPress or LinearDesign |
+| MFE | ViennaRNA `RNA.fold()` or dinucleotide NN model (Turner 2004) | — (already realistic) |
+| GC optimality | Gaussian penalty centered at 52% (σ=0.12) | — |
+| UTR accessibility | Structure + motif-aware (TOP, ARE, CPE, near-cognate starts) | mRNABERT / UTR-LM embeddings |
+| Codon pair bias | Comprehensive CPB table (100+ pairs, Coleman et al. 2008) | — (already comprehensive) |
+| Uridine depletion | Gaussian penalty at 17% U (σ=0.05) | — |
+| CpG depletion | Linear density penalty (target < 0.005) | — |
+| Translation efficiency | 5'UTR k-mer model (Optimus 5-Prime inspired) + G4/uORF detection | Saluki, iCodon, or deep-learning TE models |
+| Codon ramp | 5' ORF CAI gradient (Tuller et al. 2010, Hanson & Coller 2018) | Ribosome profiling calibration |
+| Codon diversity | Autocorrelation + synonym usage + junction diversity | — |
+
+The codon optimizer (`mrna_design/optimizer.py`) balances 5 objectives per codon:
+- CAI (40%), Uridine depletion (25%), CpG avoidance (15%),
+  Autocorrelation avoidance (10%), Codon pair bias (10%)
 
 To enable ViennaRNA:
 ```bash
