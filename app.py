@@ -1,22 +1,17 @@
 """
 app.py — Streamlit web interface for mRNA Library Designer.
 
-Upload 5' UTR, ORF, and 3' UTR FASTA files · Score · Barcode · Download
+Fully interactive mRNA library designer with barcode generation,
+construct assembly, scoring, and export.
 """
 import io
-import tempfile
-from pathlib import Path
+import random
+import string
 
+import numpy as np
 import pandas as pd
+import plotly.express as px
 import streamlit as st
-
-from mrna_design.assembler import (
-    assemble_library,
-    load_fasta_dir,
-    read_fasta,
-)
-from mrna_design.scorer import score_library
-from mrna_design.barcode import assign_barcodes
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -25,57 +20,261 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── Sidebar controls ──────────────────────────────────────────────────────────
+# ── Human codon usage table (fraction of max per amino acid) ──────────────────
+HUMAN_CODON_TABLE = {
+    "TTT": 0.45, "TTC": 1.00, "TTA": 0.07, "TTG": 0.13,
+    "CTT": 0.13, "CTC": 0.20, "CTA": 0.07, "CTG": 1.00,
+    "ATT": 0.36, "ATC": 1.00, "ATA": 0.07, "ATG": 1.00,
+    "GTT": 0.18, "GTC": 0.24, "GTA": 0.07, "GTG": 1.00,
+    "TCT": 0.15, "TCC": 0.22, "TCA": 0.12, "TCG": 0.06,
+    "AGT": 0.15, "AGC": 1.00, "CCT": 0.28, "CCC": 1.00,
+    "CCA": 0.27, "CCG": 0.11, "ACT": 0.24, "ACC": 1.00,
+    "ACA": 0.28, "ACG": 0.12, "GCT": 0.26, "GCC": 1.00,
+    "GCA": 0.23, "GCG": 0.11, "TAT": 0.43, "TAC": 1.00,
+    "TAA": 0.28, "TAG": 0.20, "TGA": 1.00, "CAT": 0.41,
+    "CAC": 1.00, "CAA": 0.25, "CAG": 1.00, "AAT": 0.46,
+    "AAC": 1.00, "AAA": 0.43, "AAG": 1.00, "GAT": 0.46,
+    "GAC": 1.00, "GAA": 0.42, "GAG": 1.00, "TGT": 0.45,
+    "TGC": 1.00, "TGG": 1.00, "CGT": 0.08, "CGC": 0.19,
+    "CGA": 0.11, "CGG": 0.20, "AGA": 0.20, "AGG": 1.00,
+    "GGT": 0.16, "GGC": 1.00, "GGA": 0.25, "GGG": 0.25,
+}
+
+# ── 3'UTR sequences ──────────────────────────────────────────────────────────
+UTR3_SEQUENCES = {
+    "Human beta-globin": (
+        "GCTCGCTTTCTTGCTGTCCAATTTCTATTAAAGGTTCCTTTGTTCCCTAAGTCCAACTACTAAACTGG"
+        "GGGATATTATGAAGGGCCTTGAGCATCTGGATTCTGCCTAATAAAAAACATTTATTTTCATTGC"
+    ),
+    "Human alpha-globin": (
+        "GCTGGAGCCTCGGTGGCCATGCTTCTTGCCCCTTGGGCCTCCCCCCAGCCCCTCCTCCCCTTCCTGCA"
+        "CCCGTACCCCCGTGGTCTTTGAATAAAGTCTGAGTGGGCGGC"
+    ),
+    "AES + mtRNR1 (Pfizer-style)": (
+        "CTGATAATGATTTTATTTTGACTGATAGTGACCTGTTCGTTGCAACAAATTGATGAGCAATGCTTTTTT"
+        "ATAATGCCAACTTTGTACAAAAAAGCAGGCTTTAAAGGAACCAATTCAGTCGACTGGATCCGGTACCGAA"
+        "TTCGATATCAAGCTTATCGATACCGTCGACCTCGAGGGGGGGCCCGGTACCCAATTCGCCCTATAGTGAG"
+        "TCGTATTACAATTCACTGGCCGTCGTTTTACAACGTCGTGACTGGGAAAACCCTGGCGTTACCCAACTTAA"
+        "TCGCCTTGCAGCACATCCCCCTTTCGCCAGCTGGCGTAATAGCGAAGAGGCCCGCACCGATCGCCCTTCCC"
+        "AACAGTTGCGCAGCCTGAATGGCGAATG"
+    ),
+    "Human albumin": (
+        "CATCACATTTAAAAGCATCTCAGCCTACCATGAGAATAAGAGAAAGAAAATGAAGATCAAAAGCTTATTCA"
+        "TCTGTTTTTCTTTTTCGTTGGTGTAAAGCCAACACCCTGTCTAAAAAACATAAATTTCTTTAATCATTTTG"
+        "CCTCTTTTCTCTGTGCTTCAATTAATAAAAAATGGAAAGAACCTCGAG"
+    ),
+}
+
+# ── 5'UTR sequences ──────────────────────────────────────────────────────────
+UTR5_SEQUENCES = {
+    "Human beta-globin": "ACATTTGCTTCTGACACAACTGTGTTCACTAGCAACCTCAAACAGACACCATG",
+    "Kozak consensus": "GCCACCATG",
+    "HSP70": "AGCAAAAGCAGGTAGATATTGAAAGAT",
+    "Tobacco mosaic virus": "GTATTTTACAACAATTACCAACAACAACAAACAACAAACAACATTACAATTACTATTTACAATTACA",
+}
+
+UTR5_HELP = {
+    "Human beta-globin": "Widely used in mRNA therapeutics; enhances translation",
+    "Kozak consensus": "Minimal strong Kozak sequence for efficient initiation",
+    "HSP70": "Heat shock protein 70 UTR; stress-responsive enhancement",
+    "Tobacco mosaic virus": "Viral omega leader; strong cap-independent translation",
+}
+
+UTR3_HELP = {
+    "Human beta-globin": "Standard 3'UTR for mRNA stability; used in many vaccines",
+    "Human alpha-globin": "Enhances mRNA stability and half-life",
+    "AES + mtRNR1 (Pfizer-style)": "Dual UTR used in BNT162b2; high stability",
+    "Human albumin": "Long half-life UTR from albumin mRNA",
+    "Custom": "Paste your own 3'UTR sequence",
+}
+
+# ── Helper functions ──────────────────────────────────────────────────────────
+
+
+def reverse_complement(seq: str) -> str:
+    """Return the reverse complement of a DNA/RNA sequence (as DNA)."""
+    comp = {"A": "T", "T": "A", "U": "A", "G": "C", "C": "G",
+            "a": "t", "t": "a", "u": "a", "g": "c", "c": "g"}
+    return "".join(comp.get(b, b) for b in reversed(seq))
+
+
+def hamming_distance(s1: str, s2: str) -> int:
+    """Hamming distance between two equal-length strings."""
+    return sum(c1 != c2 for c1, c2 in zip(s1, s2))
+
+
+def has_homopolymer(seq: str, max_run: int = 3) -> bool:
+    """Check if sequence has homopolymer run > max_run."""
+    count = 1
+    for i in range(1, len(seq)):
+        if seq[i] == seq[i - 1]:
+            count += 1
+            if count > max_run:
+                return True
+        else:
+            count = 1
+    return False
+
+
+def gc_content(seq: str) -> float:
+    """Calculate GC content as fraction."""
+    if not seq:
+        return 0.0
+    gc = sum(1 for b in seq.upper() if b in "GC")
+    return gc / len(seq)
+
+
+def generate_barcodes(n: int, length: int, min_hamming: int,
+                      gc_min: float, gc_max: float) -> list:
+    """Generate n orthogonal barcodes satisfying constraints."""
+    bases = "ACGT"
+    barcodes = []
+    max_attempts = n * 1000
+
+    for _ in range(max_attempts):
+        if len(barcodes) >= n:
+            break
+        # Generate random barcode
+        bc = "".join(random.choice(bases) for _ in range(length))
+        # Check GC content
+        gc = gc_content(bc)
+        if gc < gc_min or gc > gc_max:
+            continue
+        # Check homopolymer
+        if has_homopolymer(bc, 3):
+            continue
+        # Check Hamming distance to all existing barcodes
+        if all(hamming_distance(bc, existing) >= min_hamming for existing in barcodes):
+            barcodes.append(bc)
+
+    return barcodes
+
+
+def calculate_cai(cds: str) -> float:
+    """Calculate Codon Adaptation Index for a CDS."""
+    cds = cds.upper().replace("U", "T")
+    if len(cds) < 3:
+        return 0.0
+    codons = [cds[i:i+3] for i in range(0, len(cds) - 2, 3)]
+    scores = []
+    for codon in codons:
+        if len(codon) == 3 and codon in HUMAN_CODON_TABLE:
+            scores.append(HUMAN_CODON_TABLE[codon])
+    if not scores:
+        return 0.0
+    # Geometric mean
+    log_scores = [np.log(s) if s > 0 else np.log(0.01) for s in scores]
+    return float(np.exp(np.mean(log_scores)))
+
+
+def read_fasta_text(text: str) -> list:
+    """Parse FASTA format text, return list of (name, sequence) tuples."""
+    sequences = []
+    current_name = ""
+    current_seq = []
+    for line in text.strip().split("\n"):
+        line = line.strip()
+        if line.startswith(">"):
+            if current_name:
+                sequences.append((current_name, "".join(current_seq)))
+            current_name = line[1:].strip()
+            current_seq = []
+        else:
+            current_seq.append(line)
+    if current_name:
+        sequences.append((current_name, "".join(current_seq)))
+    return sequences
+
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("5' Cap")
+    st.markdown("## Design Parameters")
+
+    # ── Construct Settings ──
+    st.markdown("### 🧪 Construct Settings")
+
     cap_type = st.selectbox(
         "5' Cap",
-        options=["m7G", "cap1", "arca", "none"],
+        options=["CleanCap AG", "m7G", "ARCA", "Cap1"],
         index=0,
-        label_visibility="collapsed",
     )
 
-    st.header("Kozak context")
     kozak = st.selectbox(
         "Kozak context",
-        options=["strong", "moderate", "none"],
+        options=["strong (GCCACCATG)", "moderate (ACCATG)", "weak (ATG)"],
         index=0,
-        label_visibility="collapsed",
     )
 
-    st.header("Poly-A tail length (nt)")
+    utr5_choice = st.selectbox(
+        "5' UTR",
+        options=list(UTR5_SEQUENCES.keys()),
+        index=0,
+        help=UTR5_HELP.get("Human beta-globin", ""),
+    )
+    st.caption(UTR5_HELP.get(utr5_choice, ""))
+
+    utr3_choice = st.selectbox(
+        "3' UTR",
+        options=list(UTR3_HELP.keys()),
+        index=0,
+        help=UTR3_HELP.get("Human beta-globin", ""),
+    )
+    st.caption(UTR3_HELP.get(utr3_choice, ""))
+
+    custom_utr3_seq = ""
+    if utr3_choice == "Custom":
+        custom_utr3_seq = st.text_area(
+            "Custom 3' UTR sequence",
+            value="",
+            placeholder="Paste your 3'UTR sequence here...",
+        )
+
     polya_len = st.slider(
         "Poly-A tail length (nt)",
         min_value=0,
-        max_value=300,
+        max_value=200,
         value=100,
-        label_visibility="collapsed",
     )
 
-    st.header("Max combinations")
-    max_combinations = st.number_input(
-        "Max combinations",
-        min_value=1,
-        max_value=100000,
-        value=500,
-        step=1,
-        label_visibility="collapsed",
+    add_invdc = st.toggle("Add invdC at 3' end (via ligation)", value=True)
+    if add_invdc:
+        st.caption(
+            "A pre-synthesized oligo with /3InvdC/ will be ligated "
+            "using T4 RNA Ligase 1 after IVT"
+        )
+
+    st.divider()
+
+    # ── Barcode Settings ──
+    st.markdown("### 🧬 Barcode Settings")
+
+    num_barcodes = st.slider("Number of barcodes", 1, 500, 96)
+    barcode_length = st.slider("Barcode length (nt)", 10, 30, 20)
+    min_hamming_dist = st.slider("Min Hamming distance", 2, 10, 4)
+    gc_min_pct = st.slider("GC content min %", 30, 50, 40)
+    gc_max_pct = st.slider("GC content max %", 50, 70, 60)
+    barcode_position = st.selectbox(
+        "Barcode position",
+        options=["3'UTR start", "3'UTR end"],
+        index=0,
     )
 
     st.divider()
 
-    st.header("📊 Scoring weights")
+    # ── Scoring Weights ──
+    st.markdown("### 📊 Scoring Weights")
 
     cai_weight = st.slider("CAI weight", 0.0, 1.0, 0.30, 0.01)
     mfe_weight = st.slider("MFE stability weight", 0.0, 1.0, 0.25, 0.01)
     gc_weight = st.slider("GC content weight", 0.0, 1.0, 0.20, 0.01)
-    utr_weight = st.slider("UTR accessibility", 0.0, 1.0, 0.25, 0.01)
+    utr_weight = st.slider("UTR accessibility weight", 0.0, 1.0, 0.25, 0.01)
+    max_combinations = st.number_input("Max combinations", min_value=1, value=500, step=1)
 
 # ── Main panel ────────────────────────────────────────────────────────────────
 st.title("🧬 mRNA Library Designer")
-st.caption("Upload 5' UTR, ORF, and 3' UTR FASTA files · Score · Barcode · Download")
 
-st.header("1. Upload FASTA files")
+# ── Step 1: Upload or use example sequences ──
+st.header("Step 1: Upload or use example sequences")
 
 col1, col2, col3 = st.columns(3)
 
@@ -108,86 +307,339 @@ with col3:
 
 use_examples = st.checkbox("Use built-in example sequences", value=True)
 
-# ── Generate library ──────────────────────────────────────────────────────────
-st.header("2. Generate library")
+if use_examples:
+    st.info(
+        "**Built-in sequences:**\n"
+        "- 5'UTR: GCCACCATG (Kozak)\n"
+        "- CDS: ATGAAAGCAATTTTCGTACTGAAAGGTTTTGTTGGTTTTCTTGCCATCTTAATCATCTTCCTACTCACCTGA\n"
+        "- 3'UTR: Human beta-globin sequence"
+    )
+
+# ── Step 2: Generate Library ──
+st.header("Step 2: Generate Library")
 
 if st.button("🧬 Generate mRNA Library", type="primary", use_container_width=True):
-    with st.spinner("Generating mRNA library..."):
-        # Determine data directories
-        if use_examples and not (utr5_files and orf_files and utr3_files):
-            # Use built-in example data
-            base = Path(__file__).parent / "data"
-            utr5_dir = base / "utr5"
-            orf_dir = base / "orf"
-            utr3_dir = base / "utr3"
+    progress_bar = st.progress(0, text="Initializing...")
+
+    # Determine sequences to use
+    if use_examples and not (utr5_files and orf_files and utr3_files):
+        utr5_seqs = [("Kozak_5UTR", "GCCACCATG")]
+        cds_seqs = [("Example_CDS", "ATGAAAGCAATTTTCGTACTGAAAGGTTTTGTTGGTTTTCTTGCCATCTTAATCATCTTCCTACTCACCTGA")]
+        utr3_seqs = [("HBB_3UTR", UTR3_SEQUENCES["Human beta-globin"])]
+    else:
+        # Parse uploaded files
+        utr5_seqs = []
+        for f in (utr5_files or []):
+            utr5_seqs.extend(read_fasta_text(f.read().decode("utf-8")))
+        cds_seqs = []
+        for f in (orf_files or []):
+            cds_seqs.extend(read_fasta_text(f.read().decode("utf-8")))
+        utr3_seqs = []
+        for f in (utr3_files or []):
+            utr3_seqs.extend(read_fasta_text(f.read().decode("utf-8")))
+
+    if not utr5_seqs or not cds_seqs or not utr3_seqs:
+        st.error("Please upload sequences or use built-in examples.")
+    else:
+        progress_bar.progress(10, text="Generating barcodes...")
+
+        # Generate barcodes
+        barcodes = generate_barcodes(
+            n=num_barcodes,
+            length=barcode_length,
+            min_hamming=min_hamming_dist,
+            gc_min=gc_min_pct / 100.0,
+            gc_max=gc_max_pct / 100.0,
+        )
+
+        if len(barcodes) < num_barcodes:
+            st.warning(
+                f"Could only generate {len(barcodes)} barcodes "
+                f"(requested {num_barcodes}). Try relaxing constraints."
+            )
+
+        progress_bar.progress(30, text="Assembling constructs...")
+
+        # Get selected UTR sequences from sidebar
+        selected_utr5_seq = UTR5_SEQUENCES.get(utr5_choice, "GCCACCATG")
+        if utr3_choice == "Custom":
+            selected_utr3_seq = custom_utr3_seq
         else:
-            # Write uploaded files to temporary directories
-            tmpdir = Path(tempfile.mkdtemp())
-            utr5_dir = tmpdir / "utr5"
-            orf_dir = tmpdir / "orf"
-            utr3_dir = tmpdir / "utr3"
-            utr5_dir.mkdir()
-            orf_dir.mkdir()
-            utr3_dir.mkdir()
+            selected_utr3_seq = UTR3_SEQUENCES.get(utr3_choice, UTR3_SEQUENCES["Human beta-globin"])
 
-            for f in (utr5_files or []):
-                (utr5_dir / f.name).write_bytes(f.read())
-            for f in (orf_files or []):
-                (orf_dir / f.name).write_bytes(f.read())
-            for f in (utr3_files or []):
-                (utr3_dir / f.name).write_bytes(f.read())
+        # T7 promoter
+        t7_promoter = "TAATACGACTCACTATA"
+        poly_a = "A" * polya_len
 
-        try:
-            # Assemble
-            library = assemble_library(
-                utr5_dir=utr5_dir,
-                orf_dir=orf_dir,
-                utr3_dir=utr3_dir,
-                cap=cap_type,
-                kozak=kozak,
-                polya_len=polya_len,
-                max_combinations=int(max_combinations),
+        # Assemble constructs
+        constructs = []
+        total = min(len(barcodes), int(max_combinations))
+
+        for i, barcode in enumerate(barcodes[:total]):
+            # Use first CDS (or cycle through uploaded)
+            cds_name, cds_seq = cds_seqs[i % len(cds_seqs)]
+
+            # Assemble mRNA construct
+            if barcode_position == "3'UTR start":
+                mrna_seq = selected_utr5_seq + cds_seq + barcode + selected_utr3_seq + poly_a
+            else:
+                mrna_seq = selected_utr5_seq + cds_seq + selected_utr3_seq + barcode + poly_a
+
+            # DNA template: T7 + reverse complement of mRNA (U→T already DNA)
+            mrna_as_dna = mrna_seq.replace("U", "T").replace("u", "t")
+            dna_template = t7_promoter + reverse_complement(mrna_as_dna)
+
+            # Scores
+            cai_score = calculate_cai(cds_seq)
+            gc_score = gc_content(mrna_seq)
+            length_score = 1.0 / (1.0 + len(mrna_seq) / 1000.0)  # shorter is better
+
+            # Composite score
+            composite = (
+                cai_weight * cai_score +
+                gc_weight * (1.0 - abs(gc_score - 0.5) * 2) +  # penalize deviation from 50%
+                mfe_weight * 0.5 +  # placeholder since no MFE calc
+                utr_weight * 0.5    # placeholder since no structure calc
             )
 
-            # Score
-            weights = {
-                "cai": cai_weight,
-                "mfe_stability": mfe_weight,
-                "gc_content": gc_weight,
-                "utr_access": utr_weight,
+            construct = {
+                "Name": f"Construct_{i+1:04d}",
+                "Barcode": barcode,
+                "5UTR": selected_utr5_seq,
+                "CDS": cds_seq,
+                "CDS_Name": cds_name,
+                "3UTR": selected_utr3_seq,
+                "3UTR_Name": utr3_choice,
+                "PolyA": poly_a,
+                "mRNA_Sequence": mrna_seq,
+                "DNA_Template": dna_template,
+                "T7_Promoter": t7_promoter,
+                "GC_Pct": round(gc_score * 100, 2),
+                "Length": len(mrna_seq),
+                "CAI_Score": round(cai_score, 4),
+                "Composite_Score": round(composite, 4),
+                "Cap": cap_type,
+                "Kozak": kozak,
+                "PolyA_Length": polya_len,
+                "Barcode_Position": barcode_position,
             }
-            scored = score_library(library, weights)
+            constructs.append(construct)
 
-            # Barcode
-            barcoded = assign_barcodes(scored)
+            # Update progress
+            if (i + 1) % max(1, total // 10) == 0:
+                pct = 30 + int(60 * (i + 1) / total)
+                progress_bar.progress(pct, text=f"Assembling construct {i+1}/{total}...")
 
-            # Display results
-            df = pd.DataFrame(barcoded)
-            df = df.sort_values("composite_score", ascending=False).reset_index(drop=True)
+        progress_bar.progress(95, text="Finalizing...")
 
-            st.success(f"✅ Generated {len(df)} mRNA constructs")
+        # Store in session state
+        st.session_state["library"] = constructs
+        st.session_state["barcodes"] = barcodes
+        st.session_state["add_invdc"] = add_invdc
 
-            st.subheader("Top constructs")
-            display_cols = [
-                "id", "utr5_name", "orf_name", "utr3_name",
-                "composite_score", "cai", "mfe_stability", "gc_content",
-                "utr_access", "barcode", "total_length",
-            ]
-            available_cols = [c for c in display_cols if c in df.columns]
-            st.dataframe(df[available_cols].head(20), use_container_width=True)
+        progress_bar.progress(100, text="Done!")
+        st.success(f"✅ Generated {len(constructs)} mRNA constructs with {len(barcodes)} barcodes")
 
-            # Download CSV
-            csv_buffer = io.StringIO()
-            df.to_csv(csv_buffer, index=False)
-            st.download_button(
-                label="📥 Download full library (CSV)",
-                data=csv_buffer.getvalue(),
-                file_name="mrna_library.csv",
-                mime="text/csv",
-                use_container_width=True,
+# ── Step 3: Results ──
+if "library" in st.session_state and st.session_state["library"]:
+    st.header("Step 3: Results")
+
+    df = pd.DataFrame(st.session_state["library"])
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📋 Library Summary",
+        "🔬 Sequence Viewer",
+        "🧫 DNA Templates (for IVT)",
+        "💊 invdC Ligation Oligos",
+    ])
+
+    # ── Tab 1: Library Summary ──
+    with tab1:
+        # Metric cards
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Constructs", len(df))
+        m2.metric("Mean GC%", f"{df['GC_Pct'].mean():.1f}%")
+        m3.metric("Mean Length", f"{df['Length'].mean():.0f} nt")
+        m4.metric("Barcodes Generated", len(st.session_state["barcodes"]))
+
+        # Bar chart: composite score per construct (top 20)
+        top20 = df.nlargest(20, "Composite_Score")
+        fig = px.bar(
+            top20,
+            x="Name",
+            y="Composite_Score",
+            title="Composite Score per Construct (Top 20)",
+            color="Composite_Score",
+            color_continuous_scale="Reds",
+        )
+        fig.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Summary table
+        st.dataframe(
+            df[["Name", "Barcode", "GC_Pct", "Length", "Composite_Score", "3UTR_Name"]].rename(
+                columns={"GC_Pct": "GC%", "Composite_Score": "Score", "3UTR_Name": "3'UTR used"}
+            ),
+            use_container_width=True,
+        )
+
+    # ── Tab 2: Sequence Viewer ──
+    with tab2:
+        construct_names = df["Name"].tolist()
+        selected_construct = st.selectbox("Select construct", construct_names)
+
+        row = df[df["Name"] == selected_construct].iloc[0]
+
+        # Colored blocks
+        st.markdown("#### Annotated Construct")
+
+        blocks_html = (
+            '<div style="display:flex;flex-wrap:wrap;gap:2px;align-items:center;font-family:monospace;font-size:12px;">'
+            f'<span style="background:#2196F3;color:white;padding:4px 8px;border-radius:4px;">[5\'Cap: {row["Cap"]}]</span>'
+            f'<span style="background:#4CAF50;color:white;padding:4px 8px;border-radius:4px;">[5\'UTR: {len(row["5UTR"])}nt]</span>'
+            f'<span style="background:#FF9800;color:white;padding:4px 8px;border-radius:4px;">[CDS: {len(row["CDS"])}nt]</span>'
+            f'<span style="background:#F44336;color:white;padding:4px 8px;border-radius:4px;">[Barcode: {len(row["Barcode"])}nt]</span>'
+            f'<span style="background:#9C27B0;color:white;padding:4px 8px;border-radius:4px;">[3\'UTR: {len(row["3UTR"])}nt]</span>'
+            f'<span style="background:#9E9E9E;color:white;padding:4px 8px;border-radius:4px;">[Poly-A({row["PolyA_Length"]})]</span>'
+        )
+        if st.session_state.get("add_invdc", False):
+            blocks_html += '<span style="background:#8B0000;color:white;padding:4px 8px;border-radius:4px;">[invdC]</span>'
+        blocks_html += "</div>"
+
+        st.markdown(blocks_html, unsafe_allow_html=True)
+
+        # DNA template
+        st.markdown("#### DNA Template Sequence")
+        st.code(row["DNA_Template"], language=None)
+
+        # Key stats
+        st.markdown("#### Key Stats")
+        sc1, sc2, sc3, sc4 = st.columns(4)
+        sc1.metric("CAI Score", f"{row['CAI_Score']:.4f}")
+        sc2.metric("GC%", f"{row['GC_Pct']:.1f}%")
+        sc3.metric("Total Length", f"{row['Length']} nt")
+        sc4.metric("Poly-A Length", f"{row['PolyA_Length']} nt")
+
+    # ── Tab 3: DNA Templates ──
+    with tab3:
+        st.markdown("**Order these as dsDNA templates or gBlocks for IVT**")
+
+        dna_df = df[["Name", "T7_Promoter", "DNA_Template", "Length"]].copy()
+        dna_df = dna_df.rename(columns={"DNA_Template": "DNA_Template_Sequence"})
+        st.dataframe(dna_df, use_container_width=True)
+
+        # Download FASTA
+        fasta_lines = []
+        for _, r in df.iterrows():
+            fasta_lines.append(f">{r['Name']}_DNA_template")
+            fasta_lines.append(r["DNA_Template"])
+        fasta_text = "\n".join(fasta_lines)
+
+        st.download_button(
+            "📥 Download DNA Templates (FASTA)",
+            data=fasta_text,
+            file_name="dna_templates.fasta",
+            mime="text/plain",
+        )
+
+        # Download CSV
+        csv_buf = io.StringIO()
+        dna_df.to_csv(csv_buf, index=False)
+        st.download_button(
+            "📥 Download DNA Templates (CSV)",
+            data=csv_buf.getvalue(),
+            file_name="dna_templates.csv",
+            mime="text/csv",
+        )
+
+    # ── Tab 4: invdC Ligation Oligos ──
+    with tab4:
+        if st.session_state.get("add_invdc", False):
+            st.markdown(
+                "After IVT, ligate a pre-synthesized invdC oligo to the 3' end of each mRNA "
+                "using T4 RNA Ligase 1. Order these oligos from IDT with the /3InvdC/ modification."
             )
 
-        except ValueError as e:
-            st.error(f"Error: {e}")
-        except Exception as e:
-            st.error(f"Unexpected error: {e}")
+            ligation_oligo = st.text_input(
+                "Ligation oligo sequence",
+                value="TTTTTTTTTT",
+                help="10-nt poly-T splint oligo",
+            )
+
+            oligo_data = []
+            for _, r in df.iterrows():
+                idt_seq = ligation_oligo + "/3InvdC/"
+                oligo_data.append({
+                    "Name": r["Name"],
+                    "Ligation_Oligo_Sequence": ligation_oligo,
+                    "IDT_Order_Sequence": idt_seq,
+                    "Notes": "Order from IDT with 3' inverted dC modification",
+                })
+
+            oligo_df = pd.DataFrame(oligo_data)
+            st.dataframe(oligo_df, use_container_width=True)
+
+            csv_buf2 = io.StringIO()
+            oligo_df.to_csv(csv_buf2, index=False)
+            st.download_button(
+                "📥 Download IDT Order Sheet (CSV)",
+                data=csv_buf2.getvalue(),
+                file_name="invdc_oligos_idt_order.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("Enable 'Add invdC at 3' end' in the sidebar to see ligation oligo details.")
+
+    # ── Step 4: Export ──
+    st.header("Step 4: Export")
+
+    exp1, exp2, exp3 = st.columns(3)
+
+    with exp1:
+        # mRNA Sequences FASTA
+        mrna_fasta = []
+        for _, r in df.iterrows():
+            mrna_fasta.append(f">{r['Name']}")
+            mrna_fasta.append(r["mRNA_Sequence"])
+        st.download_button(
+            "📥 mRNA Sequences (FASTA)",
+            data="\n".join(mrna_fasta),
+            file_name="mrna_sequences.fasta",
+            mime="text/plain",
+            use_container_width=True,
+        )
+
+    with exp2:
+        # Full Library Metadata CSV
+        csv_full = io.StringIO()
+        df.to_csv(csv_full, index=False)
+        st.download_button(
+            "📥 Full Library Metadata (CSV)",
+            data=csv_full.getvalue(),
+            file_name="mrna_library_metadata.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    with exp3:
+        # Synthesis Order Sheet
+        order_data = []
+        for _, r in df.iterrows():
+            row_data = {
+                "Name": r["Name"],
+                "DNA_Template": r["DNA_Template"],
+                "Template_Length": len(r["DNA_Template"]),
+            }
+            if st.session_state.get("add_invdc", False):
+                row_data["invdC_Oligo"] = "TTTTTTTTTT/3InvdC/"
+            order_data.append(row_data)
+        order_df = pd.DataFrame(order_data)
+        csv_order = io.StringIO()
+        order_df.to_csv(csv_order, index=False)
+        st.download_button(
+            "📥 Synthesis Order Sheet (CSV)",
+            data=csv_order.getvalue(),
+            file_name="synthesis_order_sheet.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
