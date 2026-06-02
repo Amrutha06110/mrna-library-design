@@ -308,190 +308,212 @@ with st.sidebar:
 st.title("🧬 mRNA Library Designer")
 
 # ── Step 1: Enter or use example sequences ──
-st.header("Step 1: Enter or use example sequences")
+st.header("Step 1: Enter sequences")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.subheader("5' UTR sequences")
-    utr5_text = st.text_area(
-        "Paste 5' UTR FASTA",
+    five_utr_input = st.text_area(
+        "5' UTR sequence",
+        value="",
         height=150,
-        placeholder=">seq1\nGCCACCATG",
+        placeholder='>my_5utr\nACATTTGCTTC..." or paste raw sequence',
         key="utr5",
     )
 
 with col2:
-    st.subheader("ORF / CDS sequences")
-    orf_text = st.text_area(
-        "Paste ORF FASTA",
+    cds_input = st.text_area(
+        "ORF / CDS sequence",
+        value="",
         height=150,
-        placeholder=">seq1\nATGAAA...",
+        placeholder='>my_cds\nATGGCCTTACC..." or paste raw sequence starting with ATG',
         key="orf",
     )
 
 with col3:
-    st.subheader("3' UTR sequences")
-    utr3_text = st.text_area(
-        "Paste 3' UTR FASTA",
+    three_utr_input = st.text_area(
+        "3' UTR sequence",
+        value="",
         height=150,
-        placeholder=">seq1\nGCTCGCTTT...",
+        placeholder='>my_3utr\nUGCAAATAAAG..." or paste raw sequence',
         key="utr3",
     )
 
-use_examples = st.checkbox("Use built-in example sequences", value=True)
+# ── Helper: parse pasted text (FASTA or raw) ─────────────────────────────────
 
-if use_examples:
-    st.info(
-        "**Built-in sequences:**\n"
-        "- 5'UTR: GCCACCATG (Kozak)\n"
-        "- CDS: ATGAAAGCAATTTTCGTACTGAAAGGTTTTGTTGGTTTTCTTGCCATCTTAATCATCTTCCTACTCACCTGA\n"
-        "- 3'UTR: Human beta-globin sequence"
-    )
+
+def _parse_input_sequence(text: str) -> list:
+    """Parse pasted text as FASTA or raw sequence.
+
+    If text starts with '>', treat as FASTA (strip header, join remaining lines).
+    Otherwise treat entire text as a raw sequence.
+    Strips whitespace, converts to uppercase, replaces U with T for DNA processing.
+    """
+    text = text.strip()
+    if not text:
+        return []
+    if text.startswith(">"):
+        entries = read_fasta_text(text)
+        # Normalize each sequence
+        return [
+            (name, seq.replace(" ", "").replace("\t", "").upper().replace("U", "T"))
+            for name, seq in entries
+        ]
+    # Raw sequence: strip whitespace, uppercase, U->T
+    raw = "".join(text.split()).upper().replace("U", "T")
+    return [("pasted_sequence", raw)]
+
 
 # ── Step 2: Generate Library ──
 st.header("Step 2: Generate Library")
 
 if st.button("🧬 Generate mRNA Library", type="primary", use_container_width=True):
-    progress_bar = st.progress(0, text="Initializing...")
-
-    # Determine sequences to use
-    if use_examples and not (utr5_text.strip() and orf_text.strip() and utr3_text.strip()):
-        utr5_seqs = [("Kozak_5UTR", "GCCACCATG")]
-        cds_seqs = [("Example_CDS", "ATGAAAGCAATTTTCGTACTGAAAGGTTTTGTTGGTTTTCTTGCCATCTTAATCATCTTCCTACTCACCTGA")]
-        utr3_seqs = [("HBB_3UTR", UTR3_SEQUENCES["Human beta-globin"])]
+    # Validate CDS is provided
+    if not cds_input.strip():
+        st.error("Please paste a CDS sequence to continue.")
     else:
-        # Parse pasted text
-        utr5_seqs = read_fasta_text(utr5_text) if utr5_text.strip() else []
-        cds_seqs = read_fasta_text(orf_text) if orf_text.strip() else []
-        utr3_seqs = read_fasta_text(utr3_text) if utr3_text.strip() else []
+        progress_bar = st.progress(0, text="Initializing...")
 
-    if not utr5_seqs or not cds_seqs or not utr3_seqs:
-        st.error("Please enter sequences or use built-in examples.")
-    else:
-        progress_bar.progress(10, text="Generating barcodes...")
+        # Parse pasted sequences
+        cds_seqs = _parse_input_sequence(cds_input)
 
-        # Generate barcodes
-        barcodes = generate_barcodes(
-            n=num_barcodes,
-            length=barcode_length,
-            min_hamming=min_hamming_dist,
-            gc_min=gc_min_pct / 100.0,
-            gc_max=gc_max_pct / 100.0,
-        )
-
-        if len(barcodes) < num_barcodes:
-            st.warning(
-                f"Could only generate {len(barcodes)} barcodes "
-                f"(requested {num_barcodes}). Try relaxing constraints."
-            )
-
-        progress_bar.progress(30, text="Assembling constructs...")
-
-        # Get selected UTR sequences from sidebar
-        selected_utr5_seq = UTR5_SEQUENCES.get(utr5_choice, "GCCACCATG")
-        if utr3_choice == "Custom":
-            selected_utr3_seq = custom_utr3_seq
+        # Fallback to built-in human beta-globin for empty UTR fields
+        if five_utr_input.strip():
+            utr5_seqs = _parse_input_sequence(five_utr_input)
         else:
-            selected_utr3_seq = UTR3_SEQUENCES.get(utr3_choice, UTR3_SEQUENCES["Human beta-globin"])
+            utr5_seqs = [("human_beta_globin_5UTR", UTR5_SEQUENCES["Human beta-globin"])]
 
-        # T7 promoter
-        t7_promoter = "TAATACGACTCACTATA"
-        poly_a = "A" * polya_len
+        if three_utr_input.strip():
+            utr3_seqs = _parse_input_sequence(three_utr_input)
+        else:
+            utr3_seqs = [("human_beta_globin_3UTR", UTR3_SEQUENCES["Human beta-globin"])]
 
-        # Assemble constructs
-        constructs = []
-        total = min(len(barcodes), int(max_combinations))
+        if not cds_seqs:
+            st.error("Could not parse CDS sequence. Please check your input.")
+        else:
+            progress_bar.progress(10, text="Generating barcodes...")
 
-        for i, barcode in enumerate(barcodes[:total]):
-            # Use first CDS (or cycle through uploaded)
-            cds_name, cds_seq = cds_seqs[i % len(cds_seqs)]
-
-            # Assemble mRNA construct
-            if barcode_position == "3'UTR start":
-                mrna_seq = selected_utr5_seq + cds_seq + barcode + selected_utr3_seq + poly_a
-            else:
-                mrna_seq = selected_utr5_seq + cds_seq + selected_utr3_seq + barcode + poly_a
-
-            # DNA template: T7 + reverse complement of mRNA (U→T already DNA)
-            mrna_as_dna = mrna_seq.replace("U", "T").replace("u", "t")
-            dna_template = t7_promoter + reverse_complement(mrna_as_dna)
-
-            # Scores — use real scoring functions
-            cai_score = calculate_cai(cds_seq)
-            gc_score = gc_content(mrna_seq)
-            length_score = 1.0 / (1.0 + len(mrna_seq) / 1000.0)  # shorter is better
-
-            # Individual sub-scores (realistic calculations)
-            score_cai = cai_score
-
-            # GC score: Gaussian penalty centered at 52%
-            gc_deviation = gc_score - 0.52
-            score_gc = float(np.exp(-(gc_deviation ** 2) / (2 * 0.12 ** 2)))
-
-            # MFE proxy: dinucleotide stacking energy model
-            score_mfe = _calculate_mfe_score(mrna_seq)
-
-            # UTR accessibility: penalize high GC in 5'UTR (blocks scanning)
-            utr5_gc = gc_content(selected_utr5_seq)
-            score_utr = float(np.exp(-((utr5_gc - 0.40) ** 2) / (2 * 0.08 ** 2)))
-
-            # Composite score
-            composite = (
-                cai_weight * score_cai +
-                gc_weight * score_gc +
-                mfe_weight * score_mfe +
-                utr_weight * score_utr
+            # Generate barcodes
+            barcodes = generate_barcodes(
+                n=num_barcodes,
+                length=barcode_length,
+                min_hamming=min_hamming_dist,
+                gc_min=gc_min_pct / 100.0,
+                gc_max=gc_max_pct / 100.0,
             )
 
-            construct = {
-                "Name": f"Construct_{i+1:04d}",
-                "Barcode": barcode,
-                "5UTR": selected_utr5_seq,
-                "CDS": cds_seq,
-                "CDS_Name": cds_name,
-                "3UTR": selected_utr3_seq,
-                "3UTR_Name": utr3_choice,
-                "PolyA": poly_a,
-                "mRNA_Sequence": mrna_seq,
-                "DNA_Template": dna_template,
-                "T7_Promoter": t7_promoter,
-                "GC_Pct": round(gc_score * 100, 2),
-                "Length": len(mrna_seq),
-                "CAI_Score": round(cai_score, 4),
-                "Score_CAI": round(score_cai, 4),
-                "Score_MFE": round(score_mfe, 4),
-                "Score_GC": round(score_gc, 4),
-                "Score_UTR": round(score_utr, 4),
-                "Total_Score": round(composite, 4),
-                "Composite_Score": round(composite, 4),
-                "Cap": cap_type,
-                "Kozak": kozak,
-                "PolyA_Length": polya_len,
-                "Barcode_Position": barcode_position,
+            if len(barcodes) < num_barcodes:
+                st.warning(
+                    f"Could only generate {len(barcodes)} barcodes "
+                    f"(requested {num_barcodes}). Try relaxing constraints."
+                )
+
+            progress_bar.progress(30, text="Assembling constructs...")
+
+            # Get selected UTR sequences from sidebar
+            selected_utr5_seq = UTR5_SEQUENCES.get(utr5_choice, "GCCACCATG")
+            if utr3_choice == "Custom":
+                selected_utr3_seq = custom_utr3_seq
+            else:
+                selected_utr3_seq = UTR3_SEQUENCES.get(utr3_choice, UTR3_SEQUENCES["Human beta-globin"])
+
+            # T7 promoter
+            t7_promoter = "TAATACGACTCACTATA"
+            poly_a = "A" * polya_len
+
+            # Assemble constructs
+            constructs = []
+            total = min(len(barcodes), int(max_combinations))
+
+            for i, barcode in enumerate(barcodes[:total]):
+                # Use first CDS (or cycle through uploaded)
+                cds_name, cds_seq = cds_seqs[i % len(cds_seqs)]
+
+                # Assemble mRNA construct
+                if barcode_position == "3'UTR start":
+                    mrna_seq = selected_utr5_seq + cds_seq + barcode + selected_utr3_seq + poly_a
+                else:
+                    mrna_seq = selected_utr5_seq + cds_seq + selected_utr3_seq + barcode + poly_a
+
+                # DNA template: T7 + reverse complement of mRNA (U→T already DNA)
+                mrna_as_dna = mrna_seq.replace("U", "T").replace("u", "t")
+                dna_template = t7_promoter + reverse_complement(mrna_as_dna)
+
+                # Scores — use real scoring functions
+                cai_score = calculate_cai(cds_seq)
+                gc_score = gc_content(mrna_seq)
+                length_score = 1.0 / (1.0 + len(mrna_seq) / 1000.0)  # shorter is better
+
+                # Individual sub-scores (realistic calculations)
+                score_cai = cai_score
+
+                # GC score: Gaussian penalty centered at 52%
+                gc_deviation = gc_score - 0.52
+                score_gc = float(np.exp(-(gc_deviation ** 2) / (2 * 0.12 ** 2)))
+
+                # MFE proxy: dinucleotide stacking energy model
+                score_mfe = _calculate_mfe_score(mrna_seq)
+
+                # UTR accessibility: penalize high GC in 5'UTR (blocks scanning)
+                utr5_gc = gc_content(selected_utr5_seq)
+                score_utr = float(np.exp(-((utr5_gc - 0.40) ** 2) / (2 * 0.08 ** 2)))
+
+                # Composite score
+                composite = (
+                    cai_weight * score_cai +
+                    gc_weight * score_gc +
+                    mfe_weight * score_mfe +
+                    utr_weight * score_utr
+                )
+
+                construct = {
+                    "Name": f"Construct_{i+1:04d}",
+                    "Barcode": barcode,
+                    "5UTR": selected_utr5_seq,
+                    "CDS": cds_seq,
+                    "CDS_Name": cds_name,
+                    "3UTR": selected_utr3_seq,
+                    "3UTR_Name": utr3_choice,
+                    "PolyA": poly_a,
+                    "mRNA_Sequence": mrna_seq,
+                    "DNA_Template": dna_template,
+                    "T7_Promoter": t7_promoter,
+                    "GC_Pct": round(gc_score * 100, 2),
+                    "Length": len(mrna_seq),
+                    "CAI_Score": round(cai_score, 4),
+                    "Score_CAI": round(score_cai, 4),
+                    "Score_MFE": round(score_mfe, 4),
+                    "Score_GC": round(score_gc, 4),
+                    "Score_UTR": round(score_utr, 4),
+                    "Total_Score": round(composite, 4),
+                    "Composite_Score": round(composite, 4),
+                    "Cap": cap_type,
+                    "Kozak": kozak,
+                    "PolyA_Length": polya_len,
+                    "Barcode_Position": barcode_position,
+                }
+                constructs.append(construct)
+
+                # Update progress
+                if (i + 1) % max(1, total // 10) == 0:
+                    pct = 30 + int(60 * (i + 1) / total)
+                    progress_bar.progress(pct, text=f"Assembling construct {i+1}/{total}...")
+
+            progress_bar.progress(95, text="Finalizing...")
+
+            # Store in session state
+            st.session_state["library"] = constructs
+            st.session_state["barcodes"] = barcodes
+            st.session_state["add_invdc"] = add_invdc
+            st.session_state["scoring_weights"] = {
+                "cai_weight": cai_weight,
+                "mfe_weight": mfe_weight,
+                "gc_weight": gc_weight,
+                "utr_weight": utr_weight,
             }
-            constructs.append(construct)
 
-            # Update progress
-            if (i + 1) % max(1, total // 10) == 0:
-                pct = 30 + int(60 * (i + 1) / total)
-                progress_bar.progress(pct, text=f"Assembling construct {i+1}/{total}...")
-
-        progress_bar.progress(95, text="Finalizing...")
-
-        # Store in session state
-        st.session_state["library"] = constructs
-        st.session_state["barcodes"] = barcodes
-        st.session_state["add_invdc"] = add_invdc
-        st.session_state["scoring_weights"] = {
-            "cai_weight": cai_weight,
-            "mfe_weight": mfe_weight,
-            "gc_weight": gc_weight,
-            "utr_weight": utr_weight,
-        }
-
-        progress_bar.progress(100, text="Done!")
-        st.success(f"✅ Generated {len(constructs)} mRNA constructs with {len(barcodes)} barcodes")
+            progress_bar.progress(100, text="Done!")
+            st.success(f"✅ Generated {len(constructs)} mRNA constructs with {len(barcodes)} barcodes")
 
 # ── Step 3: Results ──
 if "library" in st.session_state and st.session_state["library"]:
