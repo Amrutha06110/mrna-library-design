@@ -17,6 +17,7 @@ from mrna_design.assembler import assemble_library
 from mrna_design.scorer import score_library
 from mrna_design.barcode import assign_barcodes
 from mrna_design.optimizer import optimize_sequences
+from mrna_design.qc import qc_library
 
 
 def parse_args():
@@ -92,11 +93,27 @@ def main():
 
     # 4. Barcode
     if not args.no_barcode:
-        print("\n[4/4] Assigning barcodes...")
+        print("\n[4/5] Assigning barcodes...")
         library = assign_barcodes(library, bc_cfg=cfg.get("barcoding", {}))
         print(f"    → {len(library)} unique barcodes assigned")
     else:
-        print("\n[4/4] Skipping barcoding (--no-barcode set)")
+        print("\n[4/5] Skipping barcoding (--no-barcode set)")
+
+    # 5. Quality control
+    print("\n[5/5] Running sequence QC checks...")
+    library = qc_library(library, config=cfg.get("qc", {}))
+    passed = sum(1 for c in library if c.get("qc_passed", True))
+    warnings = sum(c.get("qc_warnings", 0) for c in library)
+    critical = sum(c.get("qc_critical", 0) for c in library)
+    print(f"    → {passed}/{len(library)} passed QC")
+    if warnings:
+        print(f"    → {warnings} total warning(s)")
+    if critical:
+        print(f"    ⚠ {critical} critical issue(s) found")
+
+    # Re-sort by adjusted score if available
+    sort_key = "composite_score_adjusted" if "composite_score_adjusted" in library[0] else "composite_score"
+    library.sort(key=lambda x: x.get(sort_key, 0), reverse=True)
 
     # Write outputs
     _write_outputs(library, output)

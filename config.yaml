@@ -30,10 +30,13 @@ max_combinations: 1000
 # ── Scoring ──────────────────────────────────────────────────────────────────
 # Weights must sum to 1.0 (they are normalised automatically if not).
 scoring_weights:
-  cai:           0.30   # Codon Adaptation Index
-  mfe_stability: 0.25   # Minimum Free Energy structural stability
-  gc_content:    0.20   # GC content optimality (target ~50–55%)
-  utr_access:    0.25   # UTR ribosome / factor accessibility
+  cai:            0.25   # Codon Adaptation Index (geometric mean)
+  mfe_stability:  0.20   # Minimum Free Energy structural stability
+  gc_content:     0.15   # GC content optimality (target ~50–55%)
+  utr_access:     0.15   # UTR ribosome / factor accessibility
+  codon_pair:     0.10   # Codon pair bias (avoid under-represented pairs)
+  u_depletion:    0.10   # Uridine depletion (innate immune evasion)
+  cpg_depletion:  0.05   # CpG depletion (TLR9 avoidance)
 
 # ── Barcoding ─────────────────────────────────────────────────────────────────
 barcoding:
@@ -52,12 +55,21 @@ barcoding:
 
 # ── Codon Optimizer ───────────────────────────────────────────────────────────
 optimizer:
-  # method: max_cai (deterministic) | weighted (stochastic)
-  method: max_cai
+  # method: max_cai (deterministic) | weighted (stochastic) | balanced (multi-obj)
+  method: balanced
 
   # External tool. Options: builtin | vaxpress | lineardesign
   # Make sure the chosen tool is installed and on PATH.
   tool: builtin
+
+# ── Quality Control ──────────────────────────────────────────────────────────
+qc:
+  cpg_max_density: 0.02        # Max CpG dinucleotide density
+  uridine_max_fraction: 0.25   # Max uridine fraction in ORF
+  max_homopolymer_run: 5       # Max consecutive identical nucleotides
+  gc_window: 50                # Sliding window size for local GC check
+  local_gc_min: 0.25           # Min GC in any window
+  local_gc_max: 0.80           # Max GC in any window
 
 # ── Filtering (post-scoring) ─────────────────────────────────────────────────
 filters:
