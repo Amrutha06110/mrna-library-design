@@ -49,7 +49,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 5. Run the pipeline on example data
+### 5. Run the web app (Streamlit)
+
+```bash
+streamlit run app.py
+```
+
+### 6. Or run the CLI pipeline on example data
 
 ```bash
 python main.py \

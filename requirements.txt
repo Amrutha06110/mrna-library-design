@@ -3,6 +3,7 @@ biopython>=1.83
 pyyaml>=6.0
 pandas>=2.1
 numpy>=1.26
+streamlit>=1.30
 
 # Visualisation
 matplotlib>=3.8
