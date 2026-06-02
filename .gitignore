@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.conda/
+
+# Outputs (don't commit generated libraries)
+outputs/*.csv
+outputs/*.fasta
+outputs/*.json
+# But keep the gitkeep
+!outputs/.gitkeep
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# VS Code
+.vscode/settings.json
+.vscode/launch.json
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets / keys
+.env
+*.key
