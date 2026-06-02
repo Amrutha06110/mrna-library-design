@@ -307,35 +307,35 @@ with st.sidebar:
 # ── Main panel ────────────────────────────────────────────────────────────────
 st.title("🧬 mRNA Library Designer")
 
-# ── Step 1: Upload or use example sequences ──
-st.header("Step 1: Upload or use example sequences")
+# ── Step 1: Enter or use example sequences ──
+st.header("Step 1: Enter or use example sequences")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
     st.subheader("5' UTR sequences")
-    utr5_files = st.file_uploader(
-        "Upload 5' UTR FASTA",
-        accept_multiple_files=True,
-        type=["fa", "fasta", "txt"],
+    utr5_text = st.text_area(
+        "Paste 5' UTR FASTA",
+        height=150,
+        placeholder=">seq1\nGCCACCATG",
         key="utr5",
     )
 
 with col2:
     st.subheader("ORF / CDS sequences")
-    orf_files = st.file_uploader(
-        "Upload ORF FASTA",
-        accept_multiple_files=True,
-        type=["fa", "fasta", "txt"],
+    orf_text = st.text_area(
+        "Paste ORF FASTA",
+        height=150,
+        placeholder=">seq1\nATGAAA...",
         key="orf",
     )
 
 with col3:
     st.subheader("3' UTR sequences")
-    utr3_files = st.file_uploader(
-        "Upload 3' UTR FASTA",
-        accept_multiple_files=True,
-        type=["fa", "fasta", "txt"],
+    utr3_text = st.text_area(
+        "Paste 3' UTR FASTA",
+        height=150,
+        placeholder=">seq1\nGCTCGCTTT...",
         key="utr3",
     )
 
@@ -356,24 +356,18 @@ if st.button("🧬 Generate mRNA Library", type="primary", use_container_width=T
     progress_bar = st.progress(0, text="Initializing...")
 
     # Determine sequences to use
-    if use_examples and not (utr5_files and orf_files and utr3_files):
+    if use_examples and not (utr5_text.strip() and orf_text.strip() and utr3_text.strip()):
         utr5_seqs = [("Kozak_5UTR", "GCCACCATG")]
         cds_seqs = [("Example_CDS", "ATGAAAGCAATTTTCGTACTGAAAGGTTTTGTTGGTTTTCTTGCCATCTTAATCATCTTCCTACTCACCTGA")]
         utr3_seqs = [("HBB_3UTR", UTR3_SEQUENCES["Human beta-globin"])]
     else:
-        # Parse uploaded files
-        utr5_seqs = []
-        for f in (utr5_files or []):
-            utr5_seqs.extend(read_fasta_text(f.read().decode("utf-8")))
-        cds_seqs = []
-        for f in (orf_files or []):
-            cds_seqs.extend(read_fasta_text(f.read().decode("utf-8")))
-        utr3_seqs = []
-        for f in (utr3_files or []):
-            utr3_seqs.extend(read_fasta_text(f.read().decode("utf-8")))
+        # Parse pasted text
+        utr5_seqs = read_fasta_text(utr5_text) if utr5_text.strip() else []
+        cds_seqs = read_fasta_text(orf_text) if orf_text.strip() else []
+        utr3_seqs = read_fasta_text(utr3_text) if utr3_text.strip() else []
 
     if not utr5_seqs or not cds_seqs or not utr3_seqs:
-        st.error("Please upload sequences or use built-in examples.")
+        st.error("Please enter sequences or use built-in examples.")
     else:
         progress_bar.progress(10, text="Generating barcodes...")
 
