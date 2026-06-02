@@ -1,0 +1,23 @@
+name: mrna-design
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python>=3.10
+  - biopython>=1.83
+  - pyyaml>=6.0
+  - pandas>=2.1
+  - numpy>=1.26
+  - matplotlib>=3.8
+  - seaborn>=0.13
+  - plotly>=5.18
+  - jupyter
+  - ipykernel
+  - pytest
+  - pytest-cov
+  # Uncomment for ViennaRNA:
+  # - viennarna>=2.6
+  - pip
+  - pip:
+      - plotly

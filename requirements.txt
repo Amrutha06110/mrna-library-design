@@ -1,0 +1,26 @@
+# Core
+biopython>=1.83
+pyyaml>=6.0
+pandas>=2.1
+numpy>=1.26
+streamlit>=1.30
+
+# Visualisation
+matplotlib>=3.8
+seaborn>=0.13
+plotly>=5.18
+
+# Notebook support
+jupyter>=1.0
+ipykernel>=6.0
+
+# Testing
+pytest>=7.4
+pytest-cov>=4.1
+
+# Optional — uncomment to enable ViennaRNA Python bindings
+# ViennaRNA>=2.6
+
+# Optional — uncomment for mRNABERT / transformer scoring
+# torch>=2.0
+# transformers>=4.35
