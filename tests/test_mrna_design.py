@@ -11,13 +11,21 @@ from mrna_design.assembler import (
 )
 from mrna_design.scorer import (
     calc_gc_content, gc_score, cai_score, mfe_stability_score,
-    utr_accessibility_score, score_library
+    utr_accessibility_score, codon_pair_bias_score, uridine_depletion_score,
+    cpg_depletion_score, score_library
 )
 from mrna_design.barcode import (
     hamming_distance, gc_fraction, has_homopolymer,
     generate_barcode_pool, assign_barcodes, encode_peptide_barcode
 )
 from mrna_design.optimizer import translate, optimize_codon_usage
+from mrna_design.qc import (
+    check_cpg_density, check_uridine_content, check_homopolymer_runs,
+    check_local_gc_extremes, check_restriction_sites,
+    check_premature_polya_signals, check_internal_aug_in_utr,
+    check_inverted_repeats, check_mirna_seed_matches,
+    run_qc, qc_library,
+)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -188,3 +196,119 @@ def test_optimize_weighted_preserves_aa():
     seq = "AUGCUGAAGCCCGAG"
     opt = optimize_codon_usage(seq, method="weighted")
     assert translate(seq) == translate(opt)
+
+
+def test_optimize_balanced_preserves_aa():
+    seq = "AUGCUGAAGCCCGAG"
+    opt = optimize_codon_usage(seq, method="balanced")
+    assert translate(seq) == translate(opt)
+
+
+# ── scorer (advanced) ─────────────────────────────────────────────────────────
+
+def test_cai_score_geometric_mean():
+    """CAI should use geometric mean — all optimal codons → score near 1.0."""
+    # All high-frequency codons
+    seq = "UUCCUGAUCGUGUGG"  # F(UUC) L(CUG) I(AUC) V(GUG) W(UGG)
+    score = cai_score(seq)
+    assert score > 0.8
+
+def test_mfe_dinucleotide_model():
+    """GC-rich sequences should score higher on MFE (more stable)."""
+    gc_rich = "GCGCGCGCGCGCGCGCGCGC"
+    au_rich = "AUAUAUAUAUAUAUAUAUAU"
+    assert mfe_stability_score(gc_rich) > mfe_stability_score(au_rich)
+
+def test_codon_pair_bias_range():
+    seq = "AUGCUGAAGCCCGAG" * 5
+    score = codon_pair_bias_score(seq)
+    assert 0.0 <= score <= 1.0
+
+def test_uridine_depletion_optimal():
+    """Sequence with ~17% U should score highest."""
+    # Build sequence with approximately 17% U content
+    seq = "GCCACCGUGCCACCGU" * 3  # ~12.5% U — still good range
+    score = uridine_depletion_score(seq)
+    # Sequence with 25% U should score lower
+    high_u_seq = "AUGCUUUUUGAGCCC" * 3  # ~33% U
+    high_u_score = uridine_depletion_score(high_u_seq)
+    assert score > high_u_score
+
+def test_cpg_depletion_low_cpg():
+    """Sequence with no CpG should score 1.0."""
+    seq = "AAUAUUAUAAUUAAU"
+    assert cpg_depletion_score(seq) == 1.0
+
+def test_cpg_depletion_high_cpg():
+    """Sequence with many CpG should score low."""
+    seq = "CGCGCGCGCGCGCGCG"
+    assert cpg_depletion_score(seq) < 0.3
+
+
+# ── QC module ─────────────────────────────────────────────────────────────────
+
+def test_qc_cpg_density_pass():
+    # Low CpG sequence
+    result = check_cpg_density("AAUAUUAUAAUUAAUGGCCAA")
+    assert result.passed
+
+def test_qc_cpg_density_fail():
+    # High CpG sequence
+    result = check_cpg_density("CGCGCGCGCGCGCGCGCGCG", threshold=0.02)
+    assert not result.passed
+
+def test_qc_homopolymer_pass():
+    result = check_homopolymer_runs("AUGCUGAAGCCC", max_run=5)
+    assert result.passed
+
+def test_qc_homopolymer_fail():
+    result = check_homopolymer_runs("AUGAAAAAAGCCC", max_run=5)
+    assert not result.passed
+
+def test_qc_local_gc_extremes():
+    # Very high GC window
+    seq = "G" * 50 + "AUAU" * 25
+    result = check_local_gc_extremes(seq, window=50, gc_max=0.80)
+    assert not result.passed
+
+def test_qc_restriction_sites():
+    # Contains EcoRI site (GAAUUC)
+    seq = "AUGCCCGAAUUCAAAGGG"
+    result = check_restriction_sites(seq)
+    assert not result.passed
+
+def test_qc_premature_polya():
+    # Contains AAUAAA in middle
+    seq = "AUGCCC" + "AAUAAA" + "GGGCCC" * 20
+    result = check_premature_polya_signals(seq)
+    assert not result.passed
+
+def test_qc_internal_aug():
+    result = check_internal_aug_in_utr("GCCAUGCCCAUGAAA")
+    assert not result.passed
+    assert len(result.positions) == 2
+
+def test_qc_no_internal_aug():
+    result = check_internal_aug_in_utr("GCCACCCCCAAA")
+    assert result.passed
+
+def test_qc_mirna_seeds():
+    # Should not crash on short sequences
+    result = check_mirna_seed_matches("AUGCCC")
+    assert result.passed
+
+def test_qc_library_integration(tmp_fasta_dirs):
+    """Full QC pipeline should add qc fields to constructs."""
+    from mrna_design.assembler import assemble_library
+    from mrna_design.scorer import score_library
+    lib = assemble_library(
+        utr5_dir=tmp_fasta_dirs / "utr5",
+        orf_dir=tmp_fasta_dirs / "orf",
+        utr3_dir=tmp_fasta_dirs / "utr3",
+    )
+    scored = score_library(lib)
+    qc_result = qc_library(scored)
+    for c in qc_result:
+        assert "qc_passed" in c
+        assert "qc_warnings" in c
+        assert "qc_penalty" in c

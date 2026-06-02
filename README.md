@@ -2,8 +2,9 @@
 
 A Python toolkit for designing, scoring, and barcoding combinatorial mRNA libraries.
 Given FASTA files for 5' UTRs, ORFs, and 3' UTRs, it generates every combination,
-scores each construct on CAI, MFE stability, GC content, and UTR accessibility,
-assigns unique error-correcting barcodes, and outputs ranked FASTA + CSV.
+scores each construct using biophysically-grounded models (CAI, MFE, codon pair bias,
+immunogenicity metrics), runs quality control checks, assigns unique error-correcting
+barcodes, and outputs ranked FASTA + CSV.
 
 ![CI](https://github.com/YOUR_USERNAME/mrna-library-design/actions/workflows/ci.yml/badge.svg)
 
@@ -12,10 +13,29 @@ assigns unique error-correcting barcodes, and outputs ranked FASTA + CSV.
 ## Features
 
 - Combinatorial assembly: 5'UTR × ORF × 3'UTR with configurable cap, Kozak, and poly-A
-- Multi-objective scoring (CAI, MFE proxy, GC content, UTR accessibility)
+- **Multi-objective scoring** with 7 biophysical metrics:
+  - CAI (geometric mean of relative adaptiveness — Sharp & Li method)
+  - MFE stability (ViennaRNA if installed, else nearest-neighbour dinucleotide model)
+  - GC content optimality (Gaussian penalty model)
+  - UTR accessibility (structure-aware with ViennaRNA fallback)
+  - Codon pair bias (penalizes translationally attenuating pairs)
+  - Uridine depletion (innate immune evasion for modified mRNA)
+  - CpG depletion (TLR9 avoidance)
+- **Sequence QC module** with 9 automated checks:
+  - CpG dinucleotide density (immunogenicity)
+  - Uridine content (immune activation)
+  - Homopolymer runs (synthesis failure risk)
+  - Local GC extremes (folding/synthesis issues)
+  - Restriction enzyme sites (cloning compatibility)
+  - Premature polyadenylation signals
+  - Upstream AUG in 5'UTR (leaky scanning risk)
+  - Inverted repeats / dsRNA potential (innate immune sensors)
+  - miRNA seed matches in 3'UTR (stability risk)
+- **Multi-objective codon optimizer** (balanced CAI + low-U + low-CpG)
 - Error-correcting barcodes: DNA, peptide-encoding (LC-MS/MS), or QuART retron style
 - Built-in codon optimizer with hooks for VaxPress / LinearDesign
 - Ranked CSV + FASTA + JSON outputs
+- Streamlit web interface with interactive visualisations
 - GitHub Actions CI across Python 3.10 / 3.11 / 3.12
 
 ---
@@ -80,9 +100,10 @@ Outputs land in `outputs/`:
 mrna-library-design/
 ├── mrna_design/
 │   ├── assembler.py     # FASTA parsing + combinatorial assembly
-│   ├── scorer.py        # CAI, MFE, GC, UTR scoring
+│   ├── scorer.py        # CAI, MFE, GC, UTR, codon pair, immunogenicity scoring
 │   ├── barcode.py       # Error-correcting barcode generation
-│   └── optimizer.py     # Codon optimization (built-in + external hooks)
+│   ├── optimizer.py     # Multi-objective codon optimization
+│   └── qc.py           # Sequence quality control (9 automated checks)
 ├── data/
 │   ├── utr5/            # 5' UTR FASTA files
 │   ├── orf/             # ORF / CDS FASTA files
@@ -92,6 +113,7 @@ mrna-library-design/
 ├── outputs/             # Generated files (git-ignored)
 ├── notebooks/           # Jupyter analysis notebooks
 ├── main.py              # CLI entry point
+├── app.py               # Streamlit web interface
 ├── config.yaml          # All parameters
 ├── requirements.txt
 └── environment.yml      # Conda environment
@@ -120,14 +142,24 @@ pytest tests/ -v
 
 ## Upgrading scoring to real models
 
-The proxy scoring functions in `mrna_design/scorer.py` are drop-in replaceable:
+The scoring functions in `mrna_design/scorer.py` automatically use ViennaRNA when
+installed. Without it, a physics-based nearest-neighbour dinucleotide energy model
+provides realistic MFE estimates. For further accuracy:
 
-| Metric | Replacement |
-|---|---|
-| CAI | `Bio.SeqUtils.CodonAdaptationIndex` from BioPython |
-| MFE | ViennaRNA Python bindings (`import RNA`) |
-| Translation efficiency | mRNABERT / mRNA-LM embeddings |
-| Full joint optimization | VaxPress or LinearDesign |
+| Metric | Current Implementation | Optional Upgrade |
+|---|---|---|
+| CAI | Geometric mean of relative adaptiveness (Sharp & Li) | — (already production-grade) |
+| MFE | ViennaRNA `RNA.fold()` or dinucleotide NN model | — (already realistic) |
+| UTR accessibility | GC-based + ViennaRNA structure (if available) | mRNABERT / UTR-LM embeddings |
+| Codon pair bias | Log-ratio observed/expected pairs | Full CPB table from Coleman et al. |
+| Translation efficiency | Not directly modeled | Optimus 5-Prime, Saluki, or iCodon |
+| Full joint optimization | Multi-objective balanced optimizer | VaxPress or LinearDesign |
+
+To enable ViennaRNA:
+```bash
+pip install ViennaRNA
+# or: conda install -c bioconda viennarna
+```
 
 ---
 

@@ -124,6 +124,40 @@ def gc_content(seq: str) -> float:
     return gc / len(seq)
 
 
+# Nearest-neighbour RNA dinucleotide stacking energies (kcal/mol, 37°C)
+_DINUC_ENERGY = {
+    "AA": -0.93, "AU": -1.10, "AG": -2.08, "AC": -2.24,
+    "UA": -1.33, "UU": -0.93, "UG": -2.08, "UC": -2.11,
+    "GA": -2.35, "GU": -2.11, "GG": -3.26, "GC": -3.42,
+    "CA": -2.11, "CU": -2.08, "CG": -2.36, "CC": -3.26,
+    "TA": -1.33, "TU": -0.93, "TG": -2.08, "TC": -2.11,
+    "AT": -1.10, "GT": -2.11, "CT": -2.08, "TT": -0.93,
+}
+
+
+def _calculate_mfe_score(seq: str) -> float:
+    """
+    Physics-based MFE proxy using nearest-neighbour dinucleotide
+    stacking energies. Returns 0–1 (1 = very stable).
+    """
+    if len(seq) < 2:
+        return 0.5
+    seq_upper = seq.upper()
+    total_energy = 0.0
+    count = 0
+    for i in range(len(seq_upper) - 1):
+        dinuc = seq_upper[i:i+2]
+        e = _DINUC_ENERGY.get(dinuc, -1.5)
+        total_energy += e
+        count += 1
+    if count == 0:
+        return 0.5
+    energy_per_nt = total_energy / count
+    # Map range [-1.0, -3.5] to [0, 1]
+    score = (abs(energy_per_nt) - 1.0) / 2.5
+    return max(0.0, min(1.0, score))
+
+
 def generate_barcodes(n: int, length: int, min_hamming: int,
                       gc_min: float, gc_max: float) -> list:
     """Generate n orthogonal barcodes satisfying constraints."""
@@ -389,16 +423,24 @@ if st.button("🧬 Generate mRNA Library", type="primary", use_container_width=T
             mrna_as_dna = mrna_seq.replace("U", "T").replace("u", "t")
             dna_template = t7_promoter + reverse_complement(mrna_as_dna)
 
-            # Scores
+            # Scores — use real scoring functions
             cai_score = calculate_cai(cds_seq)
             gc_score = gc_content(mrna_seq)
             length_score = 1.0 / (1.0 + len(mrna_seq) / 1000.0)  # shorter is better
 
-            # Individual sub-scores
+            # Individual sub-scores (realistic calculations)
             score_cai = cai_score
-            score_gc = 1.0 - abs(gc_score - 0.5) * 2  # penalize deviation from 50%
-            score_mfe = 0.5  # placeholder since no MFE calc
-            score_utr = 0.5  # placeholder since no structure calc
+
+            # GC score: Gaussian penalty centered at 52%
+            gc_deviation = gc_score - 0.52
+            score_gc = float(np.exp(-(gc_deviation ** 2) / (2 * 0.12 ** 2)))
+
+            # MFE proxy: dinucleotide stacking energy model
+            score_mfe = _calculate_mfe_score(mrna_seq)
+
+            # UTR accessibility: penalize high GC in 5'UTR (blocks scanning)
+            utr5_gc = gc_content(selected_utr5_seq)
+            score_utr = float(np.exp(-((utr5_gc - 0.40) ** 2) / (2 * 0.08 ** 2)))
 
             # Composite score
             composite = (

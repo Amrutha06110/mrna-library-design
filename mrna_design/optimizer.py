@@ -1,12 +1,15 @@
 """
 optimizer.py — Codon optimization for ORF sequences.
 
-Provides a lightweight built-in optimizer and plug-in hooks
-for external tools (VaxPress, LinearDesign, CodonTransformer).
+Provides:
+  - Built-in multi-objective optimizer (CAI + uridine depletion + CpG avoidance)
+  - Single-objective max_cai and weighted stochastic modes
+  - Plug-in hooks for external tools (VaxPress, LinearDesign, CodonTransformer)
 """
 from __future__ import annotations
 
 import random
+import math
 from pathlib import Path
 
 
@@ -65,21 +68,54 @@ def translate(seq: str) -> str:
     return "".join(aa)
 
 
+def _codon_cai_score(codon: str) -> float:
+    """Return the relative frequency of a codon among its synonyms."""
+    aa = GENETIC_CODE.get(codon)
+    if aa is None:
+        return 0.0
+    synonyms = HUMAN_CODON_TABLE.get(aa, [(codon, 1.0)])
+    for syn, freq in synonyms:
+        if syn == codon:
+            return freq
+    return 0.0
+
+
+def _codon_u_content(codon: str) -> float:
+    """Return the uridine fraction of a codon."""
+    return sum(1 for nt in codon if nt == "U") / 3.0
+
+
+def _codon_cpg_penalty(codon: str, next_codon: str | None = None) -> float:
+    """
+    Penalty for CpG dinucleotides within or spanning codons.
+    Returns number of CpG occurrences (0, 1, or 2).
+    """
+    count = 0
+    # Within codon
+    for i in range(2):
+        if codon[i:i+2] == "CG":
+            count += 1
+    # Spanning junction with next codon
+    if next_codon and codon[2] == "C" and next_codon[0] == "G":
+        count += 1
+    return count
+
+
 def optimize_codon_usage(seq: str, method: str = "max_cai") -> str:
     """
     Recode synonymous codons to maximise human codon usage.
 
     method='max_cai' : always pick the highest-frequency synonym
     method='weighted': sample proportional to frequency (more diversity)
+    method='balanced': multi-objective (CAI + low U + low CpG)
     """
-    # Build reverse lookup: codon -> amino acid
     codons = [seq[i:i+3] for i in range(0, len(seq) - 2, 3)]
     optimized = []
 
-    for codon in codons:
+    for idx, codon in enumerate(codons):
         aa = GENETIC_CODE.get(codon)
         if aa is None:
-            optimized.append(codon)  # unknown codon — keep as-is
+            optimized.append(codon)
             continue
 
         synonyms = HUMAN_CODON_TABLE.get(aa, [(codon, 1.0)])
@@ -89,6 +125,8 @@ def optimize_codon_usage(seq: str, method: str = "max_cai") -> str:
         elif method == "weighted":
             syns, weights = zip(*synonyms)
             best = random.choices(syns, weights=weights, k=1)[0]
+        elif method == "balanced":
+            best = _select_balanced_codon(synonyms, codons, idx)
         else:
             best = codon
 
@@ -97,17 +135,56 @@ def optimize_codon_usage(seq: str, method: str = "max_cai") -> str:
     return "".join(optimized)
 
 
+def _select_balanced_codon(
+    synonyms: list[tuple[str, float]],
+    all_codons: list[str],
+    idx: int,
+) -> str:
+    """
+    Multi-objective codon selection balancing:
+      - CAI (codon frequency) — weight 0.5
+      - Uridine depletion     — weight 0.3
+      - CpG avoidance         — weight 0.2
+
+    Scores each synonym and picks the best composite.
+    """
+    next_codon = all_codons[idx + 1] if idx + 1 < len(all_codons) else None
+    best_codon = synonyms[0][0]
+    best_score = -1.0
+
+    for codon, freq in synonyms:
+        # CAI component: normalise frequency to [0, 1]
+        max_freq = max(f for _, f in synonyms)
+        cai_component = freq / max_freq if max_freq > 0 else 0
+
+        # Uridine depletion: fewer U is better
+        u_component = 1.0 - _codon_u_content(codon)
+
+        # CpG avoidance: fewer CpG is better
+        cpg_count = _codon_cpg_penalty(codon, next_codon)
+        cpg_component = 1.0 - cpg_count * 0.5  # 0 CpG → 1.0, 2 CpG → 0.0
+
+        # Weighted sum
+        score = 0.5 * cai_component + 0.3 * u_component + 0.2 * cpg_component
+
+        if score > best_score:
+            best_score = score
+            best_codon = codon
+
+    return best_codon
+
+
 def optimize_sequences(orf_dir: Path, cfg: dict) -> None:
     """
     In-place optimize all FASTA files in orf_dir.
     Writes _optimized.fasta alongside each original.
 
     cfg keys:
-      method  : "max_cai" | "weighted"   (default: max_cai)
+      method  : "max_cai" | "weighted" | "balanced"  (default: balanced)
       tool    : "builtin" | "vaxpress" | "lineardesign"
     """
-    method = cfg.get("method", "max_cai")
-    tool   = cfg.get("tool", "builtin")
+    method = cfg.get("method", "balanced")
+    tool = cfg.get("tool", "builtin")
 
     if tool != "builtin":
         print(f"    [optimizer] External tool '{tool}' selected — "
@@ -137,3 +214,4 @@ def optimize_sequences(orf_dir: Path, cfg: dict) -> None:
                 f.write(f">{rec['name']}\n{rec['seq']}\n")
 
         print(f"    → {out_path}")
+
