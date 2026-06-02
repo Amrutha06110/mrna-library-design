@@ -394,12 +394,18 @@ if st.button("🧬 Generate mRNA Library", type="primary", use_container_width=T
             gc_score = gc_content(mrna_seq)
             length_score = 1.0 / (1.0 + len(mrna_seq) / 1000.0)  # shorter is better
 
+            # Individual sub-scores
+            score_cai = cai_score
+            score_gc = 1.0 - abs(gc_score - 0.5) * 2  # penalize deviation from 50%
+            score_mfe = 0.5  # placeholder since no MFE calc
+            score_utr = 0.5  # placeholder since no structure calc
+
             # Composite score
             composite = (
-                cai_weight * cai_score +
-                gc_weight * (1.0 - abs(gc_score - 0.5) * 2) +  # penalize deviation from 50%
-                mfe_weight * 0.5 +  # placeholder since no MFE calc
-                utr_weight * 0.5    # placeholder since no structure calc
+                cai_weight * score_cai +
+                gc_weight * score_gc +
+                mfe_weight * score_mfe +
+                utr_weight * score_utr
             )
 
             construct = {
@@ -417,6 +423,11 @@ if st.button("🧬 Generate mRNA Library", type="primary", use_container_width=T
                 "GC_Pct": round(gc_score * 100, 2),
                 "Length": len(mrna_seq),
                 "CAI_Score": round(cai_score, 4),
+                "Score_CAI": round(score_cai, 4),
+                "Score_MFE": round(score_mfe, 4),
+                "Score_GC": round(score_gc, 4),
+                "Score_UTR": round(score_utr, 4),
+                "Total_Score": round(composite, 4),
                 "Composite_Score": round(composite, 4),
                 "Cap": cap_type,
                 "Kozak": kozak,
@@ -436,6 +447,12 @@ if st.button("🧬 Generate mRNA Library", type="primary", use_container_width=T
         st.session_state["library"] = constructs
         st.session_state["barcodes"] = barcodes
         st.session_state["add_invdc"] = add_invdc
+        st.session_state["scoring_weights"] = {
+            "cai_weight": cai_weight,
+            "mfe_weight": mfe_weight,
+            "gc_weight": gc_weight,
+            "utr_weight": utr_weight,
+        }
 
         progress_bar.progress(100, text="Done!")
         st.success(f"✅ Generated {len(constructs)} mRNA constructs with {len(barcodes)} barcodes")
@@ -462,6 +479,92 @@ if "library" in st.session_state and st.session_state["library"]:
         m3.metric("Mean Length", f"{df['Length'].mean():.0f} nt")
         m4.metric("Barcodes Generated", len(st.session_state["barcodes"]))
 
+        # ── Scoring Explanation Panel ──
+        weights = st.session_state.get("scoring_weights", {
+            "cai_weight": 0.30, "mfe_weight": 0.25, "gc_weight": 0.20, "utr_weight": 0.25,
+        })
+        w_cai = weights["cai_weight"]
+        w_mfe = weights["mfe_weight"]
+        w_gc = weights["gc_weight"]
+        w_utr = weights["utr_weight"]
+
+        with st.expander("📊 How constructs are scored"):
+            sc1, sc2, sc3, sc4 = st.columns(4)
+
+            # Helper for color indicator
+            def _color_indicator(score, metric_type="default"):
+                if metric_type == "gc":
+                    if 0.45 <= score <= 0.55:
+                        return "🟢"
+                    elif 0.40 <= score < 0.45 or 0.55 < score <= 0.60:
+                        return "🟡"
+                    else:
+                        return "🔴"
+                else:
+                    if score > 0.7:
+                        return "🟢"
+                    elif 0.4 <= score <= 0.7:
+                        return "🟡"
+                    else:
+                        return "🔴"
+
+            # Column 1 — CAI
+            with sc1:
+                mean_cai = df["Score_CAI"].mean() if "Score_CAI" in df.columns else 0
+                st.markdown(f"**CAI Weight: {w_cai}**")
+                st.markdown(
+                    "Measures how well your CDS codons match human preferences. "
+                    "Higher = ribosomes translate faster and more efficiently. "
+                    "Most important for protein yield."
+                )
+                st.markdown(f"Mean score: {mean_cai:.3f} {_color_indicator(mean_cai)}")
+
+            # Column 2 — MFE Stability
+            with sc2:
+                mean_mfe = df["Score_MFE"].mean() if "Score_MFE" in df.columns else 0
+                st.markdown(f"**MFE Stability Weight: {w_mfe}**")
+                st.markdown(
+                    "Minimum Free Energy — how stable the mRNA secondary structure is. "
+                    "More negative MFE = longer half-life in cells. "
+                    "Important for therapeutic durability."
+                )
+                st.markdown(f"Mean score: {mean_mfe:.3f} {_color_indicator(mean_mfe)}")
+
+            # Column 3 — GC Content
+            with sc3:
+                mean_gc = df["Score_GC"].mean() if "Score_GC" in df.columns else 0
+                # For GC indicator, use GC_Pct (as fraction)
+                mean_gc_frac = df["GC_Pct"].mean() / 100.0
+                st.markdown(f"**GC Content Weight: {w_gc}**")
+                st.markdown(
+                    "Balance of G/C vs A/U bases. Optimal is 50–55% for mRNA therapeutics. "
+                    "Too low = unstable. Too high = over-structured and poorly translated."
+                )
+                st.markdown(f"Mean score: {mean_gc:.3f} {_color_indicator(mean_gc_frac, 'gc')}")
+
+            # Column 4 — UTR Accessibility
+            with sc4:
+                mean_utr = df["Score_UTR"].mean() if "Score_UTR" in df.columns else 0
+                st.markdown(f"**UTR Accessibility Weight: {w_utr}**")
+                st.markdown(
+                    "How open the 5'UTR is for ribosome binding. "
+                    "Higher = ribosomes can reach the start codon more efficiently "
+                    "= better translation initiation."
+                )
+                st.markdown(f"Mean score: {mean_utr:.3f} {_color_indicator(mean_utr)}")
+
+            # Formula display
+            st.info(
+                f"**Total Score** = (CAI × {w_cai}) + (MFE × {w_mfe}) + (GC × {w_gc}) + (UTR × {w_utr})"
+            )
+
+            # Note box
+            st.warning(
+                "For LNP screening libraries, keep the CDS fixed across all constructs and use "
+                "equal weights (0.25 each) so that scoring reflects barcode quality only — not "
+                "CDS expression differences."
+            )
+
         # Bar chart: composite score per construct (top 20)
         top20 = df.nlargest(20, "Composite_Score")
         fig = px.bar(
@@ -475,10 +578,21 @@ if "library" in st.session_state and st.session_state["library"]:
         fig.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
 
-        # Summary table
+        # Summary table with score breakdown columns
+        display_cols = ["Name", "Barcode", "GC_Pct", "Length", "Score_CAI", "Score_MFE", "Score_GC", "Score_UTR", "Total_Score", "3UTR_Name"]
+        # Only include columns that exist in the dataframe
+        display_cols = [c for c in display_cols if c in df.columns]
         st.dataframe(
-            df[["Name", "Barcode", "GC_Pct", "Length", "Composite_Score", "3UTR_Name"]].rename(
-                columns={"GC_Pct": "GC%", "Composite_Score": "Score", "3UTR_Name": "3'UTR used"}
+            df[display_cols].rename(
+                columns={
+                    "GC_Pct": "GC%",
+                    "Score_CAI": "Score_CAI",
+                    "Score_MFE": "Score_MFE",
+                    "Score_GC": "Score_GC",
+                    "Score_UTR": "Score_UTR",
+                    "Total_Score": "Total_Score",
+                    "3UTR_Name": "3'UTR used",
+                }
             ),
             use_container_width=True,
         )
