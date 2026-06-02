@@ -9,6 +9,7 @@ import random
 import string
 
 import numpy as np
+import openpyxl  # noqa: F401 — required engine for pandas .to_excel()
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -714,14 +715,15 @@ if "library" in st.session_state and st.session_state["library"]:
             mime="text/plain",
         )
 
-        # Download CSV
-        csv_buf = io.StringIO()
-        dna_df.to_csv(csv_buf, index=False)
+        # Download Excel
+        excel_buf = io.BytesIO()
+        dna_df.to_excel(excel_buf, index=False, engine='openpyxl')
+        excel_buf.seek(0)
         st.download_button(
-            "📥 Download DNA Templates (CSV)",
-            data=csv_buf.getvalue(),
-            file_name="dna_templates.csv",
-            mime="text/csv",
+            "📥 Download DNA Templates (Excel)",
+            data=excel_buf,
+            file_name="dna_templates.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
     # ── Tab 4: invdC Ligation Oligos ──
@@ -751,13 +753,14 @@ if "library" in st.session_state and st.session_state["library"]:
             oligo_df = pd.DataFrame(oligo_data)
             st.dataframe(oligo_df, use_container_width=True)
 
-            csv_buf2 = io.StringIO()
-            oligo_df.to_csv(csv_buf2, index=False)
+            excel_buf2 = io.BytesIO()
+            oligo_df.to_excel(excel_buf2, index=False, engine='openpyxl')
+            excel_buf2.seek(0)
             st.download_button(
-                "📥 Download IDT Order Sheet (CSV)",
-                data=csv_buf2.getvalue(),
-                file_name="invdc_oligos_idt_order.csv",
-                mime="text/csv",
+                "📥 Download IDT Order Sheet (Excel)",
+                data=excel_buf2,
+                file_name="invdc_oligos.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         else:
             st.info("Enable 'Add invdC at 3' end' in the sidebar to see ligation oligo details.")
@@ -782,14 +785,15 @@ if "library" in st.session_state and st.session_state["library"]:
         )
 
     with exp2:
-        # Full Library Metadata CSV
-        csv_full = io.StringIO()
-        df.to_csv(csv_full, index=False)
+        # Full Library Metadata Excel
+        excel_full = io.BytesIO()
+        df.to_excel(excel_full, index=False, engine='openpyxl')
+        excel_full.seek(0)
         st.download_button(
-            "📥 Full Library Metadata (CSV)",
-            data=csv_full.getvalue(),
-            file_name="mrna_library_metadata.csv",
-            mime="text/csv",
+            "📥 Full Library Metadata (Excel)",
+            data=excel_full,
+            file_name="library_metadata.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
 
@@ -806,12 +810,13 @@ if "library" in st.session_state and st.session_state["library"]:
                 row_data["invdC_Oligo"] = "TTTTTTTTTT/3InvdC/"
             order_data.append(row_data)
         order_df = pd.DataFrame(order_data)
-        csv_order = io.StringIO()
-        order_df.to_csv(csv_order, index=False)
+        excel_order = io.BytesIO()
+        order_df.to_excel(excel_order, index=False, engine='openpyxl')
+        excel_order.seek(0)
         st.download_button(
-            "📥 Synthesis Order Sheet (CSV)",
-            data=csv_order.getvalue(),
-            file_name="synthesis_order_sheet.csv",
-            mime="text/csv",
+            "📥 Synthesis Order Sheet (Excel)",
+            data=excel_order,
+            file_name="synthesis_order.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
