@@ -3,6 +3,7 @@ biopython>=1.83
 pyyaml>=6.0
 pandas>=2.1
 numpy>=1.26
+pydantic>=2.5
 streamlit>=1.30
 openpyxl>=3.1
 

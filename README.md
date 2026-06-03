@@ -133,6 +133,68 @@ All options can also be passed as CLI flags (which override config):
 python main.py --max-combos 500 --optimize --output results/
 ```
 
+Configuration is validated at startup using a strict Pydantic model. Invalid values
+produce actionable error messages and fail fast before running the pipeline.
+
+---
+
+## CLI Reference
+
+```
+python main.py [OPTIONS]
+```
+
+### Input/Output
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config` | `config.yaml` | Path to YAML config file |
+| `--utr5` | from config | Directory of 5' UTR FASTA files |
+| `--orf` | from config | Directory of ORF/CDS FASTA files |
+| `--utr3` | from config | Directory of 3' UTR FASTA files |
+| `--output` | `outputs/` | Output directory |
+
+### Pipeline Options
+| Flag | Description |
+|------|-------------|
+| `--max-combos N` | Cap on total combinations |
+| `--optimize` | Run codon optimization on ORFs before assembly |
+| `--no-barcode` | Skip barcode assignment |
+
+### Performance
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--chunk-size N` | 5000 | Constructs per processing chunk (reduces peak memory) |
+| `--workers N` | 1 | Parallel scoring workers |
+
+### Scoring Transparency
+| Flag | Description |
+|------|-------------|
+| `--explain-top N` | Generate explanation artifact for top N constructs |
+
+Output CSV/JSON now includes per-metric raw score, weight, and weighted contribution fields for full scoring transparency.
+
+### Developer Options
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Validate inputs/config and print planned run stats without executing |
+| `--verbose` / `-v` | Enable debug logging with stage timings |
+
+### Examples
+
+```bash
+# Validate configuration and data without running
+python main.py --dry-run
+
+# Run with parallel workers and explain top 5
+python main.py --workers 4 --chunk-size 2000 --explain-top 5
+
+# Full pipeline with optimization
+python main.py --optimize --max-combos 500 --output results/
+
+# Verbose logging for debugging
+python main.py -v --explain-top 10
+```
+
 ---
 
 ## Running tests
@@ -176,3 +238,45 @@ pip install ViennaRNA
 ## License
 
 MIT
+
+---
+
+## CHANGELOG
+
+### v1.1.0 — Efficiency, Transparency & Developer Ergonomics
+
+#### New Features
+- **Strict config validation** (Pydantic): All config fields are validated at startup with
+  type checking, range enforcement, and automatic weight normalization. Invalid configs
+  produce clear error messages and fail fast.
+- **Chunked/streaming processing**: Assembly and scoring now process in configurable chunks
+  (`--chunk-size`) to reduce peak memory for large combinatorial libraries.
+- **Parallel scoring**: `--workers N` option for multi-worker scoring (where safe).
+- **Scoring transparency**: Output CSV/JSON now includes per-metric raw score, weight, and
+  weighted contribution for every construct.
+- **`--explain-top N`**: Generates a human-readable `explain_top.txt` artifact explaining
+  why the top N constructs ranked highest.
+- **`--dry-run`**: Validates all inputs and config, prints planned run statistics without
+  executing the full pipeline.
+- **Structured logging**: `--verbose` / `-v` enables debug logging with stage timings
+  (assembly, scoring, QC, barcoding, output).
+- **Improved CLI**: Grouped arguments, detailed help text, and usage examples.
+
+#### New Tests
+- Config validation edge cases (28 tests): invalid types, ranges, normalization, gc bounds.
+- Deterministic ranking stability regression test.
+- Chunked vs. baseline scoring equivalence test.
+- Dry-run integration test.
+
+#### Dependencies Added
+- `pydantic>=2.5` — for config validation
+
+#### Migration Notes
+- `main.py` now uses the new `PipelineConfig` model. The public CLI interface is backward
+  compatible — all existing flags continue to work.
+- Output CSV/JSON now contains additional `*_weight` and `*_contribution` columns for
+  scoring transparency. Downstream parsers should handle extra columns gracefully.
+- The new `mrna_design/pipeline.py` module contains the refactored pipeline engine.
+  Direct imports from `main.py` internal functions (e.g., `_write_outputs`) should
+  migrate to `mrna_design.pipeline`.
+
