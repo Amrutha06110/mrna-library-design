@@ -772,6 +772,85 @@ if "library" in st.session_state and st.session_state["library"]:
         else:
             st.info("Enable 'Add invdC at 3' end' in the sidebar to see ligation oligo details.")
 
+    # ── Validation Section ──
+    st.header("🔬 Construct Validation")
+    st.markdown(
+        "Run quality checks to catch biologically implausible constructs "
+        "or scoring anomalies before export."
+    )
+
+    val_col1, val_col2, val_col3 = st.columns(3)
+    with val_col1:
+        val_gc = st.checkbox("GC Bounds (40–60%)", value=True, key="val_gc")
+        val_kozak = st.checkbox("Kozak Consensus", value=True, key="val_kozak")
+    with val_col2:
+        val_homopoly = st.checkbox("Homopolymer/Dinuc Repeats", value=True, key="val_homopoly")
+        val_mfe = st.checkbox("MFE Sanity", value=True, key="val_mfe")
+    with val_col3:
+        val_scores = st.checkbox("Score Distribution", value=True, key="val_scores")
+
+    if st.button("▶️ Run Validation", key="run_validation"):
+        from mrna_design.validator import run_all_validations
+
+        # Build construct dicts from the DataFrame
+        validation_constructs = []
+        for _, row in df.iterrows():
+            construct = {
+                "full_sequence": row.get("mRNA_Sequence", ""),
+                "utr5_seq": row.get("UTR5", row.get("5UTR", "")),
+                "orf_seq": row.get("ORF", row.get("Optimized_ORF", "")),
+                "composite_score": row.get("Composite_Score", row.get("composite_score", None)),
+            }
+            # Add MFE if available
+            if "MFE" in row:
+                construct["mfe"] = row["MFE"]
+            elif "mfe_stability" in row:
+                construct["mfe"] = row["mfe_stability"]
+            validation_constructs.append(construct)
+
+        checks_enabled = {
+            "gc_bounds": val_gc,
+            "kozak_consensus": val_kozak,
+            "homopolymer_dinuc": val_homopoly,
+            "mfe_sanity": val_mfe,
+            "score_distribution": val_scores,
+        }
+
+        results = run_all_validations(
+            validation_constructs,
+            checks_enabled=checks_enabled,
+        )
+
+        if results:
+            passed_count = sum(1 for r in results if r["passed"])
+            failed_count = len(results) - passed_count
+
+            st.markdown(
+                f"**Results:** {passed_count} passed ✅ | {failed_count} failed ❌"
+            )
+
+            for r in results:
+                if r["passed"]:
+                    st.markdown(
+                        f'<div style="padding:4px 8px; margin:2px 0; '
+                        f'border-left:4px solid #28a745; background:#f0fff0;">'
+                        f'✅ <b>{r["check_name"]}</b>: {r["message"]}</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    color = "#dc3545" if r["severity"] == "critical" else "#ffc107"
+                    bg = "#fff5f5" if r["severity"] == "critical" else "#fffbf0"
+                    icon = "🔴" if r["severity"] == "critical" else "⚠️"
+                    st.markdown(
+                        f'<div style="padding:4px 8px; margin:2px 0; '
+                        f'border-left:4px solid {color}; background:{bg};">'
+                        f'{icon} <b>{r["check_name"]}</b> [{r["severity"]}]: '
+                        f'{r["message"]}</div>',
+                        unsafe_allow_html=True,
+                    )
+        else:
+            st.info("No validation checks were run. Enable at least one check above.")
+
     # ── Step 4: Export ──
     st.header("Step 4: Export")
 
