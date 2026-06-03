@@ -5,156 +5,130 @@ mRNA Library Design — main CLI entry point.
 Usage:
     python main.py --utr5 data/utr5/ --orf data/orf/ --utr3 data/utr3/
     python main.py --config config.yaml
+    python main.py --dry-run
+    python main.py --chunk-size 2000 --workers 4
+    python main.py --explain-top 10
     python main.py --help
 """
 import argparse
+import logging
 import sys
 from pathlib import Path
 
-import yaml
-
-from mrna_design.assembler import assemble_library
-from mrna_design.scorer import score_library
-from mrna_design.barcode import assign_barcodes
-from mrna_design.optimizer import optimize_sequences
-from mrna_design.qc import qc_library
+from mrna_design.config_model import load_and_validate_config
+from mrna_design.pipeline import run_pipeline
 
 
 def parse_args():
+    """Parse CLI arguments for the mRNA library design pipeline."""
     parser = argparse.ArgumentParser(
-        description="Generate, score, and barcode a combinatorial mRNA library.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description=(
+            "Generate, score, and barcode a combinatorial mRNA library.\n\n"
+            "Examples:\n"
+            "  python main.py --config config.yaml\n"
+            "  python main.py --utr5 data/utr5 --orf data/orf --utr3 data/utr3\n"
+            "  python main.py --dry-run                    # validate without running\n"
+            "  python main.py --chunk-size 2000 --workers 4  # parallel processing\n"
+            "  python main.py --explain-top 10             # explain top 10 rankings\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--config", type=Path, default="config.yaml",
-                        help="Path to YAML config file")
-    parser.add_argument("--utr5", type=Path, help="Directory of 5' UTR FASTA files")
-    parser.add_argument("--orf", type=Path, help="Directory of ORF/CDS FASTA files")
-    parser.add_argument("--utr3", type=Path, help="Directory of 3' UTR FASTA files")
-    parser.add_argument("--output", type=Path, default=Path("outputs"),
-                        help="Output directory")
-    parser.add_argument("--max-combos", type=int, default=None,
-                        help="Cap on total combinations (overrides config)")
-    parser.add_argument("--optimize", action="store_true",
-                        help="Run codon optimization on ORF sequences before assembly")
-    parser.add_argument("--no-barcode", action="store_true",
-                        help="Skip barcode assignment")
+
+    # Input/output
+    io_group = parser.add_argument_group("Input/Output")
+    io_group.add_argument("--config", type=Path, default=Path("config.yaml"),
+                          help="Path to YAML config file (default: config.yaml)")
+    io_group.add_argument("--utr5", type=Path,
+                          help="Directory of 5' UTR FASTA files (overrides config)")
+    io_group.add_argument("--orf", type=Path,
+                          help="Directory of ORF/CDS FASTA files (overrides config)")
+    io_group.add_argument("--utr3", type=Path,
+                          help="Directory of 3' UTR FASTA files (overrides config)")
+    io_group.add_argument("--output", type=Path,
+                          help="Output directory (overrides config)")
+
+    # Pipeline options
+    pipe_group = parser.add_argument_group("Pipeline Options")
+    pipe_group.add_argument("--max-combos", type=int, default=None,
+                            help="Cap on total combinations (overrides config)")
+    pipe_group.add_argument("--optimize", action="store_true",
+                            help="Run codon optimization on ORF sequences before assembly")
+    pipe_group.add_argument("--no-barcode", action="store_true",
+                            help="Skip barcode assignment")
+
+    # Performance
+    perf_group = parser.add_argument_group("Performance")
+    perf_group.add_argument("--chunk-size", type=int, default=None,
+                            help="Number of constructs to process per chunk (default: 5000)")
+    perf_group.add_argument("--workers", type=int, default=None,
+                            help="Number of parallel scoring workers (default: 1)")
+
+    # Transparency
+    trans_group = parser.add_argument_group("Scoring Transparency")
+    trans_group.add_argument("--explain-top", type=int, default=None, metavar="N",
+                            help="Generate explanation artifact for top N constructs")
+
+    # Developer ergonomics
+    dev_group = parser.add_argument_group("Developer Options")
+    dev_group.add_argument("--dry-run", action="store_true",
+                           help="Validate inputs/config and print planned run stats without executing")
+    dev_group.add_argument("--verbose", "-v", action="store_true",
+                           help="Enable verbose/debug logging with stage timings")
+
     return parser.parse_args()
 
 
-def load_config(path: Path) -> dict:
-    if path.exists():
-        with open(path) as f:
-            return yaml.safe_load(f)
-    return {}
-
-
 def main():
+    """Entry point for the mRNA library design CLI."""
     args = parse_args()
-    cfg = load_config(args.config)
 
-    # CLI args override config values
-    utr5_dir  = args.utr5  or Path(cfg.get("utr5_dir",  "data/utr5"))
-    orf_dir   = args.orf   or Path(cfg.get("orf_dir",   "data/orf"))
-    utr3_dir  = args.utr3  or Path(cfg.get("utr3_dir",  "data/utr3"))
-    output    = args.output or Path(cfg.get("output_dir", "outputs"))
-    max_combos = args.max_combos or cfg.get("max_combinations", 1000)
-
-    output.mkdir(parents=True, exist_ok=True)
-
-    print("=" * 60)
-    print("  mRNA Library Design Pipeline")
-    print("=" * 60)
-
-    # 1. (Optional) codon-optimize ORFs
-    if args.optimize:
-        print("\n[1/4] Optimizing ORF codon usage...")
-        optimize_sequences(orf_dir, cfg.get("optimizer", {}))
-    else:
-        print("\n[1/4] Skipping codon optimization (use --optimize to enable)")
-
-    # 2. Assemble combinatorial library
-    print("\n[2/4] Assembling mRNA combinations...")
-    library = assemble_library(
-        utr5_dir=utr5_dir,
-        orf_dir=orf_dir,
-        utr3_dir=utr3_dir,
-        cap=cfg.get("cap", "m7G"),
-        kozak=cfg.get("kozak", "strong"),
-        polya_len=cfg.get("polya_length", 100),
-        max_combinations=max_combos,
+    # Set up logging
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
     )
-    print(f"    → {len(library)} combinations assembled")
+    logger = logging.getLogger("mrna_design")
 
-    # 3. Score
-    print("\n[3/4] Scoring combinations...")
-    library = score_library(library, weights=cfg.get("scoring_weights", {}))
-    library.sort(key=lambda x: x["composite_score"], reverse=True)
-    print(f"    → Top score: {library[0]['composite_score']:.3f}")
+    # Build config overrides from CLI args
+    overrides: dict = {}
+    if args.utr5:
+        overrides["utr5_dir"] = str(args.utr5)
+    if args.orf:
+        overrides["orf_dir"] = str(args.orf)
+    if args.utr3:
+        overrides["utr3_dir"] = str(args.utr3)
+    if args.output:
+        overrides["output_dir"] = str(args.output)
+    if args.max_combos is not None:
+        overrides["max_combinations"] = args.max_combos
+    if args.chunk_size is not None:
+        overrides["chunk_size"] = args.chunk_size
+    if args.workers is not None:
+        overrides["workers"] = args.workers
 
-    # 4. Barcode
-    if not args.no_barcode:
-        print("\n[4/5] Assigning barcodes...")
-        library = assign_barcodes(library, bc_cfg=cfg.get("barcoding", {}))
-        print(f"    → {len(library)} unique barcodes assigned")
-    else:
-        print("\n[4/5] Skipping barcoding (--no-barcode set)")
+    # Load and validate config
+    try:
+        cfg = load_and_validate_config(args.config, overrides)
+    except ValueError as e:
+        logger.error(str(e))
+        sys.exit(1)
 
-    # 5. Quality control
-    print("\n[5/5] Running sequence QC checks...")
-    library = qc_library(library, config=cfg.get("qc", {}))
-    passed = sum(1 for c in library if c.get("qc_passed", True))
-    warnings = sum(c.get("qc_warnings", 0) for c in library)
-    critical = sum(c.get("qc_critical", 0) for c in library)
-    print(f"    → {passed}/{len(library)} passed QC")
-    if warnings:
-        print(f"    → {warnings} total warning(s)")
-    if critical:
-        print(f"    ⚠ {critical} critical issue(s) found")
+    logger.debug("Configuration loaded and validated successfully")
 
-    # Re-sort by adjusted score if available
-    sort_key = "composite_score_adjusted" if "composite_score_adjusted" in library[0] else "composite_score"
-    library.sort(key=lambda x: x.get(sort_key, 0), reverse=True)
-
-    # Write outputs
-    _write_outputs(library, output)
-    print(f"\n✓ Done. Outputs written to: {output}/")
-    print("=" * 60)
-
-
-def _write_outputs(library: list[dict], output: Path):
-    import csv, json
-
-    # CSV (ranked)
-    csv_path = output / "library_ranked.csv"
-    if library:
-        with open(csv_path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=list(library[0].keys()))
-            writer.writeheader()
-            writer.writerows(library)
-
-    # FASTA of full sequences
-    fasta_path = output / "library.fasta"
-    with open(fasta_path, "w") as f:
-        for entry in library:
-            header = (
-                f">{entry['id']} "
-                f"utr5={entry['utr5_name']} "
-                f"orf={entry['orf_name']} "
-                f"utr3={entry['utr3_name']} "
-                f"score={entry['composite_score']:.4f} "
-                f"barcode={entry.get('barcode','N/A')}"
-            )
-            f.write(header + "\n")
-            f.write(entry["full_sequence"] + "\n")
-
-    # JSON for downstream analysis
-    json_path = output / "library.json"
-    with open(json_path, "w") as f:
-        json.dump(library, f, indent=2)
-
-    print(f"    → {csv_path}")
-    print(f"    → {fasta_path}")
-    print(f"    → {json_path}")
+    # Run pipeline
+    try:
+        run_pipeline(
+            cfg=cfg,
+            optimize=args.optimize,
+            no_barcode=args.no_barcode,
+            explain_top=args.explain_top,
+            dry_run=args.dry_run,
+        )
+    except Exception as e:
+        logger.error("Pipeline failed: %s", e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
