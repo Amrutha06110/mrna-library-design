@@ -38,6 +38,9 @@ barcodes, and outputs ranked FASTA + CSV.
 - Error-correcting barcodes: DNA, peptide-encoding (LC-MS/MS), or QuART retron style
 - Built-in codon optimizer with hooks for VaxPress / LinearDesign
 - Ranked CSV + FASTA + JSON outputs
+- **Best candidates selection** with tie-banding (epsilon or percentile) and secondary tie-breakers
+- **Pareto front** computation for multi-objective candidate comparison
+- **Step 4 Excel export**: single-click download of full library, best candidates, tie band, and Pareto front as a multi-sheet `.xlsx` workbook
 - Streamlit web interface with interactive visualisations
 - GitHub Actions CI across Python 3.10 / 3.11 / 3.12
 
@@ -280,3 +283,27 @@ MIT
   Direct imports from `main.py` internal functions (e.g., `_write_outputs`) should
   migrate to `mrna_design.pipeline`.
 
+---
+
+## Step 4 — Excel Export & Best Candidates
+
+The Streamlit app's **Step 4: Export** section now provides enhanced download options:
+
+| Button | Description | Example Filename |
+|--------|-------------|-----------------|
+| Download full library (Excel) | Multi-sheet workbook with full library, best candidates, tie band, and Pareto front | `mrna_library_20260603_173000.xlsx` |
+| Download best candidates (Excel) | Standalone workbook with shortlisted candidates only | `mrna_best_candidates_20260603_173000.xlsx` |
+| Download all Step 4 outputs (Excel/ZIP) | Combined multi-sheet workbook with all generated outputs | `mrna_exports_20260603_173000.xlsx` |
+| Full Library (CSV) | Backward-compatible CSV export | `mrna_library_20260603_173000.csv` |
+
+### Best Candidate Selection Logic
+
+1. Compute `max_total = df["Total_Score"].max()`
+2. Create a tie band: all candidates within `epsilon=0.0003` of max (or top 10% percentile)
+3. Apply secondary tie-breakers: `Score_MFE` desc → `Score_GC` desc → `Name` asc
+4. Return the sorted shortlist as "best candidates"
+
+### Pareto Front
+
+A simple Pareto front is computed by maximising `Score_MFE`, `Score_GC`, and `Score_UTR`.
+Non-dominated candidates are exported as the `pareto_front` sheet when present.

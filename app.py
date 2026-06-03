@@ -14,6 +14,13 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from mrna_design.selector import select_best_candidates, pareto_front
+from mrna_design.export import (
+    export_library_excel,
+    export_best_candidates_excel,
+    generate_timestamp,
+)
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="mRNA Library Designer",
@@ -768,6 +775,11 @@ if "library" in st.session_state and st.session_state["library"]:
     # ── Step 4: Export ──
     st.header("Step 4: Export")
 
+    # --- Compute best candidates and Pareto front ---
+    ts = generate_timestamp()
+    best_df, tie_band_df = select_best_candidates(df)
+    pareto_df = pareto_front(df)
+
     exp1, exp2, exp3 = st.columns(3)
 
     with exp1:
@@ -820,3 +832,70 @@ if "library" in st.session_state and st.session_state["library"]:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
+
+    # --- Additional Step 4 downloads: Best Candidates & All Outputs ---
+    st.subheader("Best Candidates & Combined Export")
+
+    if not best_df.empty:
+        st.write(
+            f"**{len(best_df)}** best candidate(s) selected "
+            f"(tie band: {len(tie_band_df)} candidate(s))"
+        )
+        st.dataframe(best_df.head(20), use_container_width=True)
+
+    exp4, exp5, exp6 = st.columns(3)
+
+    with exp4:
+        # Download full library as Excel
+        full_xlsx = export_library_excel(
+            full_library_df=df,
+            best_candidates_df=best_df,
+            tie_band_df=tie_band_df,
+            pareto_df=pareto_df,
+        )
+        st.download_button(
+            "📥 Download full library (Excel)",
+            data=full_xlsx,
+            file_name=f"mrna_library_{ts}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    with exp5:
+        # Download best candidates as standalone Excel
+        best_xlsx = export_best_candidates_excel(best_df)
+        st.download_button(
+            "📥 Download best candidates (Excel)",
+            data=best_xlsx,
+            file_name=f"mrna_best_candidates_{ts}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    with exp6:
+        # Download all Step 4 outputs (multi-sheet Excel)
+        all_xlsx = export_library_excel(
+            full_library_df=df,
+            best_candidates_df=best_df,
+            tie_band_df=tie_band_df,
+            pareto_df=pareto_df,
+        )
+        st.download_button(
+            "📥 Download all Step 4 outputs (Excel/ZIP)",
+            data=all_xlsx,
+            file_name=f"mrna_exports_{ts}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    # CSV export preserved for backward compatibility
+    csv_buf = io.BytesIO()
+    df.to_csv(csv_buf, index=False)
+    csv_buf.seek(0)
+    st.download_button(
+        "📥 Full Library (CSV)",
+        data=csv_buf,
+        file_name=f"mrna_library_{ts}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
